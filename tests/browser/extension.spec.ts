@@ -6,7 +6,11 @@ import type { AddressInfo } from 'node:net';
 test.describe.configure({ mode: 'serial' });
 
 // Only the isolated test copy receives a deterministic Translator. dist/ always uses Chrome's real API.
-const mock = `globalThis.Translator = {
+const mock = `globalThis.LanguageDetector = {
+  availability: async () => 'available',
+  create: async () => ({detect: async () => [{detectedLanguage:'pl',confidence:0.99}],destroy(){}})
+};
+globalThis.Translator = {
   availability: async pair => pair.sourceLanguage === 'fr' && pair.targetLanguage === 'ja' ? 'unavailable' : 'available',
   create: async pair => ({
     translate: async text => {
@@ -53,6 +57,8 @@ test.beforeAll(async () => {
   extensionId = new URL(worker.url()).host;
   control = await context.newPage();
   await control.goto(`chrome-extension://${extensionId}/setup.html`);
+  await control.getByLabel('Source language', { exact: true }).selectOption('pl');
+  await control.getByRole('button', { name: 'Apply languages' }).click();
   await control.getByRole('button', { name: 'Enable & test translation' }).click();
   await expect(control.locator('#sample-result')).toHaveText('Hello.');
   await expect(control.locator('#setup-status')).toContainText('All set');
@@ -154,4 +160,21 @@ test('remembered sites translate after navigation and popup reflects live state'
   await popup.screenshot({ path: 'work/popup-preview.png' });
   await popup.close();
   await control.screenshot({ path: 'work/setup-preview.png', fullPage: true });
+});
+
+test('automatic source mode translates with a concrete source and skips pages matching the target', async () => {
+  await control.getByLabel('Source language', { exact: true }).selectOption('auto');
+  await control.getByLabel('Target language', { exact: true }).selectOption('de');
+  await control.getByRole('button', { name: 'Apply languages' }).click();
+  await control.getByRole('button', { name: 'Enable automatic detection', exact: true }).click();
+  await expect(control.locator('#setup-status')).toContainText('All set');
+  await command('toggle', true);
+  await expect(shop.locator('h1')).toHaveText('pl:de:Witaj w sklepie');
+  const state = await control.evaluate(message => chrome.runtime.sendMessage(message), { target: 'background', type: 'state', tabId });
+  expect(state.data.status.detectedSource).toBe('pl');
+  await control.getByLabel('Target language', { exact: true }).selectOption('pl');
+  await control.getByRole('button', { name: 'Apply languages' }).click();
+  await expect(shop.locator('h1')).toHaveText('Witaj w sklepie');
+  const same = await control.evaluate(message => chrome.runtime.sendMessage(message), { target: 'background', type: 'state', tabId });
+  expect(same.data.status.error).toBeNull();
 });

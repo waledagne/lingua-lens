@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Lingua Lens",
-  "version": "0.2.0",
-  "description": "Translate websites and newly opened dialogs between your chosen languages, locally in Chrome.",
+  "version": "0.3.0",
+  "description": "Automatically detect website languages and translate pages and dialogs into your chosen language, locally in Chrome.",
   "minimum_chrome_version": "138",
   "permissions": ["activeTab", "scripting", "storage", "offscreen"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],

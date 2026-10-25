@@ -1,5 +1,7 @@
 import { errorMessage, isWebsite, MAX_BATCH, MAX_TEXT, originPattern, pairKey, parsePair, siteKey, unwrap, type BackgroundRequest, type PageStatus, type Settings, type TabState } from './shared';
 import { readSettings, storedSettings } from './settings';
+import { collectSourceContext } from './source-context';
+import { normalizeLanguage, validateContext } from './source-detector';
 
 async function settings(): Promise<Settings> {
   return readSettings(await chrome.storage.local.get(null));
@@ -85,6 +87,15 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
     if (tabId === undefined) return settings();
     return tabState(tabId);
   }
+  if (message.type === 'detect') {
+    if (sender.tab?.id === undefined) throw new Error('Language detection must come from a webpage.');
+    const state = await tabState(sender.tab.id, false);
+    const pair = parsePair(message.pair);
+    if (!state.enabled || pair.sourceLanguage !== 'auto' || pairKey(pair) !== pairKey(state.pair)) throw new Error('Language detection settings changed or translation is paused.');
+    const context = validateContext(message.context);
+    await engine();
+    return unwrap<string>(await chrome.runtime.sendMessage({ target: 'engine', type: 'detect', context }));
+  }
   if (message.type === 'translate') {
     if (sender.tab?.id === undefined) throw new Error('Translation requests must come from a webpage.');
     if (!Array.isArray(message.texts) || message.texts.length > MAX_BATCH ||
@@ -94,11 +105,20 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
     const state = await tabState(sender.tab.id, false);
     if (!state.enabled) throw new Error('Translation is paused.');
     if (pairKey(pair) !== pairKey(state.pair)) throw new Error('The selected languages changed. Retry translation.');
+    const sourceLanguage = pair.sourceLanguage === 'auto' ? message.sourceLanguage : pair.sourceLanguage;
+    if (!sourceLanguage || normalizeLanguage(sourceLanguage) !== sourceLanguage || (pair.sourceLanguage !== 'auto' && message.sourceLanguage && message.sourceLanguage !== pair.sourceLanguage)) throw new Error('Detect or select a supported source language before translating.');
+    if (sourceLanguage === pair.targetLanguage) return message.texts;
     await engine();
-    return unwrap<string[]>(await chrome.runtime.sendMessage({ target: 'engine', type: 'translate', texts: message.texts, pair }));
+    return unwrap<string[]>(await chrome.runtime.sendMessage({ target: 'engine', type: 'translate', texts: message.texts, pair: { sourceLanguage, targetLanguage: pair.targetLanguage } }));
   }
   // Only extension controls may change settings. Content scripts receive configuration through messages.
   if (!sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('Use the extension controls to change translation settings.');
+  if (message.type === 'source-context') {
+    const tab = await chrome.tabs.get(message.tabId);
+    originPattern(tab.url ?? '');
+    const results = await chrome.scripting.executeScript({ target: { tabId: message.tabId, frameIds: [0] }, func: collectSourceContext });
+    return validateContext(results[0]?.result);
+  }
   if (message.type === 'languages') return mutate(async () => {
     const pair = parsePair(message.pair);
     await chrome.storage.local.set({ pair });
@@ -109,7 +129,12 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
     const pair = parsePair(message.pair);
     const config = await settings();
     if (pairKey(pair) !== pairKey(config.pair)) throw new Error('Languages changed in another window. Select the current pair and try setup again.');
-    await chrome.storage.local.set({ preparedPairs: [...new Set([...config.preparedPairs, pairKey(pair)])] });
+    if (pair.sourceLanguage === 'auto') {
+      const source = message.detectedSource;
+      if (source && normalizeLanguage(source) !== source) throw new Error('Invalid detected source language.');
+      const preparedPairs = source && source !== pair.targetLanguage ? [...new Set([...config.preparedPairs, pairKey({ sourceLanguage: source, targetLanguage: pair.targetLanguage })])] : config.preparedPairs;
+      await chrome.storage.local.set({ detectorReady: true, preparedPairs });
+    } else await chrome.storage.local.set({ preparedPairs: [...new Set([...config.preparedPairs, pairKey(pair)])] });
     await refreshTabs();
     return settings();
   });

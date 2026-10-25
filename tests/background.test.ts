@@ -11,7 +11,7 @@ test('background migrates settings and manages languages and arbitrary websites'
   const tabs = new Map([[1, { id: 1, url: 'https://news.example.com/article' }], [2, { id: 2, url: 'https://www.other.test/page' }], [3, { id: 3, url: 'chrome://extensions' }]]);
   let listener!: (message: unknown, sender: chrome.runtime.MessageSender, respond: (value: unknown) => void) => unknown;
   let updated!: (id: number, change: { status?: string }) => void;
-  let contexts = 0, refreshed = 0;
+  let contexts = 0, refreshed = 0, engineRequests = 0;
   const area = (data: Record<string, unknown>) => ({
     get: async (keys: null | string | string[]) => keys === null ? structuredClone(data) : Object.fromEntries((typeof keys === 'string' ? [keys] : keys).map(key => [key, structuredClone(data[key])])),
     set: async (values: Record<string, unknown>) => { Object.assign(data, structuredClone(values)); },
@@ -26,7 +26,7 @@ test('background migrates settings and manages languages and arbitrary websites'
       onMessage: { addListener(callback: typeof listener) { listener = callback; } },
       onInstalled: event, onStartup: event, ContextType: { OFFSCREEN_DOCUMENT: 'OFFSCREEN_DOCUMENT' },
       getContexts: async () => contexts ? [{}] : [],
-      sendMessage: async (message: { pair: Settings['pair']; texts: string[] }) => ({ ok: true, data: message.texts.map(text => pairKey(message.pair) + ':' + text) }),
+      sendMessage: async (message: { type: string; pair: Settings['pair']; texts: string[] }) => { engineRequests++; return { ok: true, data: message.type === 'detect' ? 'fr' : message.texts.map(text => pairKey(message.pair) + ':' + text) }; },
     },
     tabs: {
       get: async (id: number) => tabs.get(id), query: async () => [...tabs.values()],
@@ -34,7 +34,7 @@ test('background migrates settings and manages languages and arbitrary websites'
       onRemoved: event, onUpdated: { addListener(callback: typeof updated) { updated = callback; } },
     },
     scripting: {
-      executeScript: async () => {}, getRegisteredContentScripts: async () => [...scripts.values()],
+      executeScript: async () => [{ result: { sample: 'Bonjour et bienvenue sur notre site. Voici les informations pour votre visite.', pageLanguage: 'fr' } }], getRegisteredContentScripts: async () => [...scripts.values()],
       unregisterContentScripts: async ({ ids }: { ids: string[] }) => { for (const id of ids) scripts.delete(id); },
       registerContentScripts: async (values: { id: string; matches: string[] }[]) => { for (const value of values) scripts.set(value.id, value); },
     },
@@ -51,7 +51,7 @@ test('background migrates settings and manages languages and arbitrary websites'
   }
   await t.test('migration preserves the old prepared pair but enables no site implicitly', async () => {
     const config = await send<Settings>({ target: 'background', type: 'state' });
-    assert.equal(config.ready, true); assert.deepEqual(config.autoSites, []); assert.equal(local.schemaVersion, 2); assert.equal(scripts.size, 0);
+    assert.equal(config.ready, false); assert.equal(config.pair.sourceLanguage, 'auto'); assert.deepEqual(config.preparedPairs, ['pl:en']); assert.deepEqual(config.autoSites, []); assert.equal(local.schemaVersion, 3); assert.equal(scripts.size, 0);
     const manifest = JSON.parse(await readFile('public/manifest.json', 'utf8'));
     assert.equal(manifest.host_permissions, undefined); assert.equal(manifest.content_scripts, undefined);
   });
@@ -96,5 +96,25 @@ test('background migrates settings and manages languages and arbitrary websites'
     await send({ target: 'background', type: 'auto', tabId: 1, enabled: false });
     assert.equal(scripts.size, 0); assert.deepEqual(local.autoSites, []);
     assert.equal((await send<Settings>({ target: 'background', type: 'languages', pair: { sourceLanguage: 'pl', targetLanguage: 'en' } })).ready, true);
+  });
+  await t.test('auto mode detects the source, routes a concrete pair, and skips matching target text', async () => {
+    const automatic = { sourceLanguage: 'auto', targetLanguage: 'en' };
+    assert.equal((await send<Settings>({ target: 'background', type: 'languages', pair: automatic })).ready, false);
+    assert.equal((await send<Settings>({ target: 'background', type: 'ready', pair: automatic })).detectorReady, true);
+    await send({ target: 'background', type: 'toggle', tabId: 1, enabled: true });
+    const context = await send<{ sample: string; pageLanguage: string }>({ target: 'background', type: 'source-context', tabId: 1 });
+    assert.equal(context.pageLanguage, 'fr');
+    await assert.rejects(send({ target: 'background', type: 'source-context', tabId: 1 }, page), /extension controls/);
+    assert.equal(await send({ target: 'background', type: 'detect', context, pair: automatic }, page), 'fr');
+    await assert.rejects(send({ target: 'background', type: 'detect', context: { ...context, sample: 'x'.repeat(6001) }, pair: automatic }, page), /Invalid/);
+    assert.deepEqual(await send({ target: 'background', type: 'translate', texts: ['Bonjour'], pair: automatic, sourceLanguage: 'fr' }, page), ['fr:en:Bonjour']);
+    await assert.rejects(send({ target: 'background', type: 'translate', texts: ['Bonjour'], pair: automatic }, page), /Detect or select/);
+    const requests = engineRequests;
+    assert.deepEqual(await send({ target: 'background', type: 'translate', texts: ['Hello'], pair: automatic, sourceLanguage: 'en' }, page), ['Hello']);
+    assert.equal(engineRequests, requests);
+    await send({ target: 'background', type: 'ready', pair: automatic, detectedSource: 'en' });
+    assert.ok(!(local.preparedPairs as string[]).includes('en:en'));
+    await send({ target: 'background', type: 'ready', pair: automatic, detectedSource: 'fr' });
+    assert.ok((local.preparedPairs as string[]).includes('fr:en'));
   });
 });

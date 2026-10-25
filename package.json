@@ -1,6 +1,6 @@
 {
   "name": "lingua-lens",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Continuous website translation between your chosen languages in Chrome.",

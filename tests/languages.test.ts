@@ -6,6 +6,8 @@ import { chunks } from '../src/segment.ts';
 
 test('validates language pairs and rejects identity/unknown pairs', () => {
   assert.deepEqual(parsePair({ sourceLanguage: 'ja', targetLanguage: 'fr' }), { sourceLanguage: 'ja', targetLanguage: 'fr' });
+  assert.deepEqual(parsePair({ sourceLanguage: 'auto', targetLanguage: 'fr' }), { sourceLanguage: 'auto', targetLanguage: 'fr' });
+  assert.throws(() => parsePair({ sourceLanguage: 'en', targetLanguage: 'auto' }));
   assert.throws(() => parsePair({ sourceLanguage: 'en', targetLanguage: 'en' }), /different/);
   for (const value of [null, {}, 'en', { sourceLanguage: 'xx', targetLanguage: 'en' }]) assert.throws(() => parsePair(value));
   assert.equal(new Set(LANGUAGES.map(([code]) => code)).size, LANGUAGES.length);
@@ -15,13 +17,16 @@ test('new installations have no preselected site and readiness is specific to a 
   assert.deepEqual(defaults.autoSites, []); assert.equal(defaults.ready, false);
   const saved = storedSettings({ ...defaults, preparedPairs: ['pl:en'], pair: { sourceLanguage: 'de', targetLanguage: 'en' } });
   assert.equal(readSettings(saved).ready, false);
-  assert.equal(readSettings({ ...saved, pair: DEFAULT_PAIR }).ready, true);
+  assert.equal(readSettings({ ...saved, pair: { sourceLanguage: 'pl', targetLanguage: 'en' } }).ready, true);
+  assert.equal(readSettings({ ...saved, pair: DEFAULT_PAIR }).ready, false);
+  assert.equal(readSettings({ ...saved, pair: DEFAULT_PAIR, detectorReady: true }).ready, true);
 });
 test('migrates previous setup without inventing a remembered website', () => {
   const config = readSettings({ ready: true });
-  assert.deepEqual(config.preparedPairs, [pairKey(DEFAULT_PAIR)]);
+  assert.deepEqual(config.preparedPairs, ['pl:en']);
   assert.deepEqual(config.autoSites, []);
-  assert.equal(config.ready, true);
+  assert.equal(config.ready, false);
+  assert.deepEqual(readSettings({ schemaVersion: 2, pair: { sourceLanguage: 'de', targetLanguage: 'fr' }, preparedPairs: ['de:fr'] }).pair, { sourceLanguage: 'auto', targetLanguage: 'fr' });
   assert.deepEqual(readSettings({ autoSites: ['news.example.com'] }).autoSites, ['news.example.com']);
   assert.equal(readSettings({ schemaVersion: 2, ready: true }).ready, false);
 });

@@ -1,5 +1,5 @@
 export interface LanguagePair { sourceLanguage: string; targetLanguage: string }
-export const DEFAULT_PAIR: LanguagePair = { sourceLanguage: 'pl', targetLanguage: 'en' };
+export const DEFAULT_PAIR: LanguagePair = { sourceLanguage: 'auto', targetLanguage: 'en' };
 // Chrome's documented language list; availability is checked for each chosen pair on the device.
 export const LANGUAGES = [
   ['ar', 'Arabic', 'مرحبًا.'], ['bn', 'Bengali', 'নমস্কার।'], ['bg', 'Bulgarian', 'Здравейте.'],
@@ -19,11 +19,11 @@ export const LANGUAGES = [
 ] as const;
 export function parsePair(value: unknown): LanguagePair {
   const pair = value as Partial<LanguagePair> | null;
-  if (!pair || !LANGUAGES.some(([code]) => code === pair.sourceLanguage) || !LANGUAGES.some(([code]) => code === pair.targetLanguage)) throw new Error('Choose a supported source and target language.');
+  if (!pair || (pair.sourceLanguage !== 'auto' && !LANGUAGES.some(([code]) => code === pair.sourceLanguage)) || !LANGUAGES.some(([code]) => code === pair.targetLanguage)) throw new Error('Choose a supported source and target language.');
   if (pair.sourceLanguage === pair.targetLanguage) throw new Error('Choose different source and target languages.');
   return { sourceLanguage: pair.sourceLanguage!, targetLanguage: pair.targetLanguage! };
 }
 export function pairKey(pair: LanguagePair): string { return `${pair.sourceLanguage}:${pair.targetLanguage}`; }
-export function languageName(code: string): string { return LANGUAGES.find(([value]) => value === code)?.[1] ?? code; }
+export function languageName(code: string): string { return code === 'auto' ? 'Auto-detect' : LANGUAGES.find(([value]) => value === code)?.[1] ?? code; }
 export function pairLabel(pair: LanguagePair): string { return `${languageName(pair.sourceLanguage)} → ${languageName(pair.targetLanguage)}`; }
 export function sampleText(code: string): string { return LANGUAGES.find(([value]) => value === code)?.[2] ?? 'Hello.'; }

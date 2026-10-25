@@ -4,16 +4,19 @@ export const MAX_TEXT = 12000;
 export const MAX_BATCH = 32;
 
 export type Reply<T> = { ok: true; data: T } | { ok: false; error: string };
-export interface Settings { pair: LanguagePair; preparedPairs: string[]; ready: boolean; autoSites: string[] }
-export interface PageStatus { enabled: boolean; translated: number; pending: number; error: string | null }
+export interface SourceContext { sample: string; pageLanguage: string }
+export interface Settings { pair: LanguagePair; preparedPairs: string[]; detectorReady: boolean; ready: boolean; autoSites: string[] }
+export interface PageStatus { enabled: boolean; translated: number; pending: number; error: string | null; detectedSource?: string | null }
 export interface TabState extends Settings { enabled: boolean; site: string; status: PageStatus | null }
 export type BackgroundRequest =
   | { target: 'background'; type: 'state'; tabId?: number }
-  | { target: 'background'; type: 'translate'; texts: string[]; pair: LanguagePair }
+  | { target: 'background'; type: 'translate'; texts: string[]; pair: LanguagePair; sourceLanguage?: string }
+  | { target: 'background'; type: 'detect'; context: SourceContext; pair: LanguagePair }
+  | { target: 'background'; type: 'source-context'; tabId: number }
   | { target: 'background'; type: 'languages'; pair: LanguagePair }
   | { target: 'background'; type: 'toggle'; tabId: number; enabled: boolean }
   | { target: 'background'; type: 'auto'; tabId: number; enabled: boolean }
-  | { target: 'background'; type: 'ready'; pair: LanguagePair };
+  | { target: 'background'; type: 'ready'; pair: LanguagePair; detectedSource?: string };
 export type PageRequest = { target: 'page'; type: 'status' | 'refresh' };
 
 export function siteKey(url: string): string {
