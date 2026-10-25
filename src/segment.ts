@@ -1,8 +1,8 @@
-// Keep long product descriptions below the translator input limit, preserving every character.
-export function chunks(text: string, limit = 1800): string[] {
+// Keep long text below the translator input limit, preserving every character.
+export function chunks(text: string, limit = 1800, sourceLanguage = 'en'): string[] {
   const result: string[] = [];
   let chunk = '';
-  const sentences = new Intl.Segmenter('pl', { granularity: 'sentence' }).segment(text);
+  const sentences = new Intl.Segmenter(sourceLanguage, { granularity: 'sentence' }).segment(text);
   for (const { segment } of sentences) {
     if (chunk && chunk.length + segment.length > limit) { result.push(chunk); chunk = ''; }
     if (segment.length <= limit) { chunk += segment; continue; }

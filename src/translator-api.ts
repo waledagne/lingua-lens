@@ -1,13 +1,13 @@
-import { PAIR } from './shared';
+import type { LanguagePair } from './shared';
 
 export type Availability = 'unavailable' | 'downloadable' | 'downloading' | 'available';
 export interface LocalTranslator { translate(text: string): Promise<string>; destroy(): void }
 interface DownloadMonitor {
   addEventListener(type: 'downloadprogress', listener: (event: { loaded: number }) => void): void;
 }
-interface TranslatorFactory {
-  availability(options: typeof PAIR): Promise<Availability>;
-  create(options: typeof PAIR & { monitor?: (monitor: DownloadMonitor) => void }): Promise<LocalTranslator>;
+export interface TranslatorFactory {
+  availability(options: LanguagePair): Promise<Availability>;
+  create(options: LanguagePair & { monitor?: (monitor: DownloadMonitor) => void }): Promise<LocalTranslator>;
 }
 export function translatorAPI(): TranslatorFactory {
   const api = (globalThis as typeof globalThis & { Translator?: TranslatorFactory }).Translator;

@@ -3,20 +3,27 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Set up Lingua Lens</title><link rel="stylesheet" href="styles.css"></head>
 <body class="setup">
   <main class="setup-shell">
-    <header class="brand"><span class="mark" aria-hidden="true">ą<span>→a</span></span><div><strong>Lingua Lens</strong><small>Made for the parts other translators miss.</small></div></header>
-    <div class="eyebrow">ONE-TIME SETUP · POLISH → ENGLISH</div>
+    <header class="brand"><span class="mark" aria-hidden="true">文<span>→A</span></span><div><strong>Lingua Lens</strong><small>Made for the parts other translators miss.</small></div></header>
+    <div class="eyebrow">YOUR LANGUAGES · LOCAL TRANSLATION</div>
     <h1>Make yourself<br>at home on the web.</h1>
-    <p class="intro">Read Polish pages in English, including the dialog that just opened and the menu you haven't clicked yet.</p>
+    <p class="intro">Read websites in your chosen language, including the dialog that just opened and the menu you haven't clicked yet.</p>
     <section class="setup-card">
-      <div class="step-label">01 <span>Prepare local translation</span></div>
-      <p>Chrome downloads the language packs it needs. After setup, translation happens on this device. No account or API key required.</p>
-      <button id="prepare" class="primary">Download &amp; enable translation</button>
+      <div class="step-label">01 <span>Choose your languages</span></div>
+      <div class="language-selectors">
+        <label>From<select id="source-language" aria-label="Source language" disabled></select></label>
+        <button id="swap-languages" class="swap-button" aria-label="Swap languages" disabled>⇄</button>
+        <label>To<select id="target-language" aria-label="Target language" disabled></select></label>
+      </div>
+      <button id="apply-languages" class="secondary apply-button" disabled>Apply languages</button>
+      <p id="language-hint" class="language-hint" role="status">Languages apply to all translated tabs.</p>
+      <p>Chrome checks the selected pair and downloads any language packs it needs. After setup, translation happens on this device. No account or API key required.</p>
+      <button id="prepare" class="primary" disabled>Prepare selected languages</button>
       <progress id="progress" max="1" value="0" hidden aria-label="Language pack download progress"></progress>
       <p id="setup-status" role="status" aria-live="polite">Checking Chrome compatibility…</p>
       <p id="setup-error" class="error" role="alert" hidden></p>
-      <div id="sample" class="sample" hidden><span>Twój koszyk jest pusty.</span><span aria-hidden="true">↓</span><strong id="sample-result"></strong></div>
+      <div id="sample" class="sample" hidden><span id="sample-source" dir="auto"></span><span aria-hidden="true">↓</span><strong id="sample-result" dir="auto"></strong></div>
     </section>
-    <section class="next-step"><div class="step-label">02 <span>Visit Allegro</span></div><p>After setup, refresh your Allegro tab. Translation starts automatically, and keeps watching as you browse. Use the extension button to pause and restore Polish.</p><a class="visit-link" href="https://allegro.pl/" target="_blank" rel="noreferrer">Open Allegro <span aria-hidden="true">↗</span></a></section>
-    <footer>Chrome 138+ on desktop · Polish → English · Version 0.1</footer>
+    <section class="next-step"><div class="step-label">02 <span>Translate a website</span></div><p>Open any ordinary website, click Lingua Lens in the toolbar, and choose <strong>Translate this page</strong>. Turn on <strong>Always translate this site</strong> if you want translation on future visits. Use <strong>Pause &amp; restore original</strong> to return to the source text.</p><p>Chrome settings, the Web Store, and other protected browser pages cannot be translated.</p></section>
+    <footer>Chrome 138+ on desktop · On-device translation · Version 0.2</footer>
   </main><script src="setup.js"></script>
 </body></html>

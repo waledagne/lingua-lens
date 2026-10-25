@@ -129,6 +129,6 @@ test('splits long descriptions without losing text or breaking emoji', () => {
   assert.ok(result.every(part => part.length <= 1801));
   assert.ok(result.every(part => !/[\uD800-\uDBFF]$/u.test(part)));
   assert.equal(withPadding(' \nTekst\t', ' Text '), ' \nText\t');
-  assert.equal(siteKey('https://www.allegro.pl/oferta/a'), 'allegro.pl');
+  assert.equal(siteKey('https://www.allegro.pl/oferta/a'), 'www.allegro.pl');
   assert.equal(siteKey('https://allegro.pl.example.org/'), 'allegro.pl.example.org');
 });

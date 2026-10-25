@@ -3,15 +3,16 @@ import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+test.describe.configure({ mode: 'serial' });
 
 // Only the isolated test copy receives a deterministic Translator. dist/ always uses Chrome's real API.
 const mock = `globalThis.Translator = {
-  availability: async () => 'available',
-  create: async () => ({
+  availability: async pair => pair.sourceLanguage === 'fr' && pair.targetLanguage === 'ja' ? 'unavailable' : 'available',
+  create: async pair => ({
     translate: async text => {
       await new Promise(r => setTimeout(r, 8));
-      const dictionary = {'Twój koszyk jest pusty.':'Your cart is empty.','Wybierz dostawę':'Choose delivery','Metoda dostawy':'Delivery method','Dostawa jutro':'Delivery tomorrow','Zamknij':'Close','Szukaj produktów':'Search products','Witaj w sklepie':'Welcome to the shop','Pomoc i kontakt':'Help and contact','Treść ramki':'Frame content','Liczba produktów: 1':'Number of products: 1'};
-      return dictionary[text] || 'English: ' + text;
+      const dictionary = {'Witaj.':'Hello.','Twój koszyk jest pusty.':'Your cart is empty.','Wybierz dostawę':'Choose delivery','Metoda dostawy':'Delivery method','Dostawa jutro':'Delivery tomorrow','Zamknij':'Close','Szukaj produktów':'Search products','Witaj w sklepie':'Welcome to the shop','Pomoc i kontakt':'Help and contact','Treść ramki':'Frame content','Liczba produktów: 1':'Number of products: 1'};
+      return pair.sourceLanguage === 'pl' && pair.targetLanguage === 'en' ? dictionary[text] || 'English: ' + text : pair.sourceLanguage + ':' + pair.targetLanguage + ':' + text;
     }, destroy() {}
   })
 };\n`;
@@ -29,8 +30,7 @@ test.beforeAll(async () => {
   await mkdir(extension, { recursive: true });
   await cp('dist', extension, { recursive: true });
   const manifest = JSON.parse(await readFile(path.join(extension, 'manifest.json'), 'utf8'));
-  manifest.host_permissions.push('http://127.0.0.1/*');
-  manifest.content_scripts[0].matches.push('http://127.0.0.1/*');
+  manifest.host_permissions = ['*://127.0.0.1/*', '*://localhost/*'];
   await writeFile(path.join(extension, 'manifest.json'), JSON.stringify(manifest));
   for (const file of ['engine.js', 'setup.js']) {
     const source = await readFile(path.join(extension, file), 'utf8');
@@ -54,7 +54,7 @@ test.beforeAll(async () => {
   control = await context.newPage();
   await control.goto(`chrome-extension://${extensionId}/setup.html`);
   await control.getByRole('button', { name: 'Enable & test translation' }).click();
-  await expect(control.locator('#sample-result')).toHaveText('Your cart is empty.');
+  await expect(control.locator('#sample-result')).toHaveText('Hello.');
   await expect(control.locator('#setup-status')).toContainText('All set');
   shop = await context.newPage(); await shop.goto(origin);
   const tabs = await worker.evaluate(() => chrome.tabs.query({ url: 'http://127.0.0.1/*' }));
@@ -70,6 +70,8 @@ async function command(type: 'toggle' | 'auto', enabled: boolean) {
   expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
 }
 test('extension routes actual DOM requests through service worker, offscreen document, and segmentation worker', async () => {
+  await expect(shop.locator('h1')).toHaveText('Witaj w sklepie');
+  expect(await worker.evaluate(() => chrome.scripting.getRegisteredContentScripts())).toEqual([]);
   await command('toggle', true);
   await expect(shop.locator('h1')).toHaveText('Welcome to the shop');
   await expect(shop.locator('#cart')).toHaveText('Your cart is empty.');
@@ -79,6 +81,47 @@ test('extension routes actual DOM requests through service worker, offscreen doc
   await expect(shop.frameLocator('iframe').locator('p')).toHaveText('Frame content');
   const contexts = await worker.evaluate(() => chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT] }));
   expect(contexts.length).toBe(1);
+});
+test('language selection restores originals, prepares the chosen pair, and avoids cache mixing', async () => {
+  await command('toggle', false);
+  const popup = await context.newPage(); await shop.bringToFront();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await popup.getByLabel('Source language', { exact: true }).selectOption('fr');
+  await popup.getByLabel('Target language', { exact: true }).selectOption('de');
+  await popup.getByRole('button', { name: 'Apply languages' }).click();
+  await expect(popup.locator('#badge')).toHaveText('Setup needed');
+  await expect(shop.locator('h1')).toHaveText('Witaj w sklepie');
+  await expect(control.getByLabel('Source language', { exact: true })).toHaveValue('fr');
+  await control.getByRole('button', { name: 'Enable & test translation' }).click();
+  await expect(control.locator('#sample-result')).toHaveText('fr:de:Bonjour.');
+  await expect(popup.getByRole('button', { name: 'Translate this page', exact: true })).toBeEnabled();
+  await popup.locator('#toggle').click();
+  await expect(shop.locator('h1')).toHaveText('fr:de:Witaj w sklepie');
+  await popup.getByLabel('Source language', { exact: true }).selectOption('pl');
+  await popup.getByLabel('Target language', { exact: true }).selectOption('en');
+  await popup.getByRole('button', { name: 'Apply languages' }).click();
+  await expect(shop.locator('h1')).toHaveText('Welcome to the shop');
+  await popup.close();
+});
+test('manual translation also works on another hostname and unsupported pairs stay inactive', async () => {
+  const other = await context.newPage();
+  await other.goto(origin.replace('127.0.0.1', 'localhost'));
+  await expect(other.locator('h1')).toHaveText('Witaj w sklepie');
+  const otherTab = (await worker.evaluate(() => chrome.tabs.query({ url: 'http://localhost/*' })))[0].id!;
+  const result = await control.evaluate(message => chrome.runtime.sendMessage(message), { target: 'background', type: 'toggle', tabId: otherTab, enabled: true });
+  expect(result).toMatchObject({ ok: true });
+  await expect(other.locator('h1')).toHaveText('Welcome to the shop');
+  await control.getByLabel('Source language', { exact: true }).selectOption('fr');
+  await control.getByLabel('Target language', { exact: true }).selectOption('ja');
+  await control.getByRole('button', { name: 'Apply languages' }).click();
+  await expect(control.locator('#setup-error')).toContainText('cannot provide French → Japanese');
+  await expect(control.locator('#prepare')).toBeDisabled();
+  await expect(other.locator('h1')).toHaveText('Witaj w sklepie');
+  await control.getByLabel('Source language', { exact: true }).selectOption('pl');
+  await control.getByLabel('Target language', { exact: true }).selectOption('en');
+  await control.getByRole('button', { name: 'Apply languages' }).click();
+  await expect(shop.locator('h1')).toHaveText('Welcome to the shop');
+  await other.close();
 });
 test('late modal content and updates translate; buttons keep working and pause restores originals', async () => {
   await shop.locator('#open').click();
