@@ -1,0 +1,9 @@
+<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>Lingua Lens test shop</title>
+<style>body{font:16px system-ui;max-width:900px;margin:50px auto;background:#f6f7f5;color:#273f31}button{padding:12px 18px;cursor:pointer}dialog{border:1px solid #ccc;border-radius:12px;padding:30px}section{padding:25px;background:white;margin:20px 0}</style></head>
+<body><h1>Witaj w sklepie</h1><section><h2>Twój koszyk</h2><p id="cart">Twój koszyk jest pusty.</p><button id="open">Wybierz dostawę</button><button id="update">Dodaj produkt</button><input id="query" placeholder="Szukaj produktów" value="Mój tekst"></section><div id="shadow-host"></div><iframe src="/frame"></iframe>
+<script>
+let clicks=0;
+document.querySelector('#open').addEventListener('click',()=>{const modal=document.createElement('dialog');modal.innerHTML='<h2>Metoda dostawy</h2><p>Dostawa jutro</p><button id="close">Zamknij</button>';document.body.append(modal);modal.querySelector('button').onclick=()=>modal.remove();modal.showModal()});
+document.querySelector('#update').onclick=()=>{clicks++;document.querySelector('#cart').firstChild.data='Liczba produktów: '+clicks};
+const root=document.querySelector('#shadow-host').attachShadow({mode:'open'});root.innerHTML='<p>Pomoc i kontakt</p>';
+</script></body></html>

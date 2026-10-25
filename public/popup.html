@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lingua Lens</title><link rel="stylesheet" href="styles.css"></head>
+<body class="popup">
+  <header class="brand"><span class="mark" aria-hidden="true">ą<span>→a</span></span><div><strong>Lingua Lens</strong><small>A little less lost in translation.</small></div><span class="version">0.1</span></header>
+  <main>
+    <div class="eyebrow">YOUR BROWSER, IN ENGLISH</div>
+    <div class="language-pair"><span>Polski <small>PL</small></span><span class="arrow" aria-hidden="true">→</span><span>English <small>EN</small></span></div>
+    <section class="site-card" aria-label="Current website">
+      <div class="site-heading"><span class="status-dot" id="dot"></span><strong id="site">Checking this page…</strong><span id="badge" class="badge">Ready</span></div>
+      <p id="summary" role="status" aria-live="polite">Finding your translation settings.</p>
+      <div id="metrics" class="metrics" hidden><span><strong id="translated">0</strong> text items translated</span><span id="pending"></span></div>
+    </section>
+    <p id="error" class="error" role="alert" hidden></p>
+    <button id="toggle" class="primary" disabled>Translate this page</button>
+    <button id="setup" class="secondary" hidden>Set up local translation</button>
+    <label class="auto-row"><span><strong>Always translate this site</strong><small>Include new pages, menus, and dialogs.</small></span><input id="auto" type="checkbox" role="switch" disabled></label>
+    <footer><span class="local-icon" aria-hidden="true">◉</span> Translated on your device <button id="settings" class="text-button">Setup</button></footer>
+  </main>
+  <script src="popup.js"></script>
+</body></html>

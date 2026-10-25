@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Lingua Lens",
+  "version": "0.1.0",
+  "description": "Translate Polish pages and newly opened dialogs into English, locally in Chrome.",
+  "minimum_chrome_version": "138",
+  "permissions": ["activeTab", "scripting", "storage", "offscreen"],
+  "host_permissions": ["https://allegro.pl/*", "https://*.allegro.pl/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "action": {"default_popup": "popup.html", "default_title": "Lingua Lens"},
+  "options_page": "setup.html",
+  "content_scripts": [{
+    "matches": ["https://allegro.pl/*", "https://*.allegro.pl/*"],
+    "js": ["content.js"],
+    "run_at": "document_idle",
+    "all_frames": true,
+    "match_origin_as_fallback": true
+  }]
+}

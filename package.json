@@ -1,0 +1,24 @@
+{
+  "name": "lingua-lens",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Continuous Polish to English translation for Chrome, starting with Allegro.",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/dom-translator.test.ts",
+    "test:browser": "npm run build && playwright test",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/chrome": "^0.3.6",
+    "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
+    "happy-dom": "^21.0.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
