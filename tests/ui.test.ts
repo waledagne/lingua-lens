@@ -9,14 +9,16 @@ async function until(check: () => boolean): Promise<void> {
   for (let i = 0; i < 300; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.ok(check(), 'UI did not reach the expected state');
 }
-async function ui(t: TestContext, name: 'popup' | 'setup', website = true, options: { context?: SourceContext; detectedSource?: string; detectorReady?: boolean; pageStatus?: PageStatus } = {}) {
+async function ui(t: TestContext, name: 'popup' | 'setup', website = true, options: { context?: SourceContext; detectedSource?: string; detectorReady?: boolean; pageStatus?: PageStatus; permissionGranted?: boolean; autoSite?: boolean } = {}) {
   const window = new Window({ url: 'chrome-extension://lens/' + name + '.html' + (options.context ? '?tabId=1' : ''), settings: { enableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true } });
   const document = window.document as unknown as Document;
   const html = (await readFile('public/' + name + '.html', 'utf8')).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gu, '');
   document.write(html);
-  let config: Settings = { pair: { ...DEFAULT_PAIR }, detectorReady: options.detectorReady ?? false, preparedPairs: ['pl:en'], ready: options.detectorReady ?? false, autoSites: [] };
+  let config: Settings = { pair: { ...DEFAULT_PAIR }, detectorReady: options.detectorReady ?? false, preparedPairs: ['pl:en'], ready: options.detectorReady ?? false, autoSites: options.autoSite ? ['www.example.com'] : [] };
   const messages: BackgroundRequest[] = [];
   const prepared: string[] = [];
+  const permissionRequests: string[][] = [];
+  const manifest = JSON.parse(await readFile('public/manifest.json', 'utf8')) as { optional_host_permissions: string[] };
   const mock = {
     tabs: { query: async () => [{ id: 1, url: website ? 'https://www.example.com' : 'chrome://extensions' }] },
     runtime: {
@@ -24,6 +26,7 @@ async function ui(t: TestContext, name: 'popup' | 'setup', website = true, optio
       sendMessage: async (message: BackgroundRequest) => {
         messages.push(message);
         if (message.type === 'languages') config = { ...config, pair: message.pair, ready: message.pair.sourceLanguage === 'auto' ? config.detectorReady : config.preparedPairs.includes(pairKey(message.pair)) };
+        if (message.type === 'auto') config = { ...config, autoSites: message.enabled ? ['www.example.com'] : [] };
         if (message.type === 'ready') { config = { ...config, detectorReady: config.detectorReady || message.pair.sourceLanguage === 'auto', ready: true, preparedPairs: [...config.preparedPairs, message.pair.sourceLanguage === 'auto' ? (message.detectedSource ?? '') + ':' + message.pair.targetLanguage : pairKey(message.pair)] }; }
         if (message.type === 'source-context') return { ok: true, data: options.context };
         const state: TabState = { ...config, site: website ? 'www.example.com' : '', status: options.pageStatus ?? null, enabled: options.pageStatus?.enabled ?? false };
@@ -31,7 +34,16 @@ async function ui(t: TestContext, name: 'popup' | 'setup', website = true, optio
       },
     },
     storage: { onChanged: { addListener() {} } },
-    permissions: { request: async () => true },
+    permissions: { request: async ({ origins }: { origins: string[] }) => {
+      permissionRequests.push([...origins]);
+      // Model Chrome's matching-scheme requirement against the actual manifest.
+      // The old *:// request is not contained by either explicit scheme declaration.
+      if (!origins.every(origin => manifest.optional_host_permissions.some(declared => {
+        const [scheme, hostPath] = origin.split('://');
+        return declared === scheme + '://*/*' && !!hostPath;
+      }))) throw new Error('Only permissions specified in the manifest may be requested.');
+      return options.permissionGranted ?? true;
+    } },
   };
   Object.assign(window, { chrome: mock, LanguageDetector: { availability: async () => 'available', create: async () => ({ detect: async () => [{ detectedLanguage: options.detectedSource ?? 'fr', confidence: 0.99 }], destroy() {} }) }, Translator: {
     availability: async (pair: Settings['pair']) => pair.sourceLanguage === 'fr' && pair.targetLanguage === 'ja' ? 'unavailable' : 'available',
@@ -46,8 +58,35 @@ async function ui(t: TestContext, name: 'popup' | 'setup', website = true, optio
   };
   const button = (id: string) => document.getElementById(id) as HTMLButtonElement;
   await until(() => !(document.getElementById('source-language') as HTMLSelectElement).disabled);
-  return { document, select, button, messages, prepared };
+  return { document, select, button, messages, prepared, permissionRequests };
 }
+
+test('automatic translation requests declared schemes for only the selected site and enables the switch', async t => {
+  const { document, messages, permissionRequests } = await ui(t, 'popup', true, { detectorReady: true });
+  const automatic = document.getElementById('auto') as HTMLInputElement;
+  automatic.click();
+  await until(() => automatic.checked && !automatic.disabled);
+  assert.deepEqual(permissionRequests.map(origins => [...origins]), [['http://www.example.com/*', 'https://www.example.com/*']]);
+  assert.ok(messages.some(message => message.type === 'auto' && message.enabled));
+  assert.equal(document.getElementById('error')!.hidden, true);
+});
+test('automatic translation stays disabled when the site permission is denied', async t => {
+  const { document, messages } = await ui(t, 'popup', true, { detectorReady: true, permissionGranted: false });
+  const automatic = document.getElementById('auto') as HTMLInputElement;
+  automatic.click();
+  await until(() => !document.getElementById('error')!.hidden && !automatic.disabled);
+  assert.equal(automatic.checked, false);
+  assert.match(document.getElementById('error')!.textContent!, /Website access was not granted/);
+  assert.equal(messages.some(message => message.type === 'auto'), false);
+});
+test('automatic translation can be disabled without requesting site permissions again', async t => {
+  const { document, messages, permissionRequests } = await ui(t, 'popup', true, { detectorReady: true, autoSite: true });
+  const automatic = document.getElementById('auto') as HTMLInputElement;
+  assert.equal(automatic.checked, true); automatic.click();
+  await until(() => !automatic.checked && !automatic.disabled);
+  assert.deepEqual(permissionRequests, []);
+  assert.ok(messages.some(message => message.type === 'auto' && !message.enabled));
+});
 
 test('popup saves selected languages explicitly, rejects equal languages, and keeps drafts across polling', async t => {
   const { document, select, button, messages } = await ui(t, 'popup');

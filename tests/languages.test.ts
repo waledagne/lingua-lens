@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_PAIR, LANGUAGES, isWebsite, originPattern, pairKey, parsePair, siteKey } from '../src/shared.ts';
+import { DEFAULT_PAIR, LANGUAGES, isWebsite, originPattern, pairKey, parsePair, siteKey, siteOrigins } from '../src/shared.ts';
 import { readSettings, storedSettings } from '../src/settings.ts';
 import { chunks } from '../src/segment.ts';
 
@@ -37,6 +37,9 @@ test('filters invalid persisted settings and keeps exact hostnames without speci
   assert.deepEqual(config.autoSites, ['example.com']);
   for (const host of ['www.allegro.pl', 'allegro.pl', 'news.example.com', 'localhost']) assert.equal(siteKey('https://' + host + '/path'), host);
   assert.equal(originPattern('https://example.com/page'), '*://example.com/*');
+  assert.deepEqual(siteOrigins('www.example.com'), ['http://www.example.com/*', 'https://www.example.com/*']);
+  assert.deepEqual(siteOrigins('localhost'), ['http://localhost/*', 'https://localhost/*']);
+  for (const host of ['*', '*.example.com', 'user@example.com', 'example.com/path', 'example.com:8080', '']) assert.throws(() => siteOrigins(host));
   for (const url of ['chrome://extensions', 'file:///test.html', 'https://chromewebstore.google.com/detail/x', 'https://chrome.google.com/webstore/detail/x']) { assert.equal(isWebsite(url), false); assert.throws(() => originPattern(url)); }
 });
 test('segments several source languages without losing Unicode or whitespace', () => {

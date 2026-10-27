@@ -1,4 +1,4 @@
-import { errorMessage, isWebsite, MAX_BATCH, MAX_TEXT, originPattern, pairKey, parsePair, siteKey, unwrap, type BackgroundRequest, type PageStatus, type Settings, type TabState } from './shared';
+import { errorMessage, isWebsite, MAX_BATCH, MAX_TEXT, originPattern, pairKey, parsePair, siteKey, siteOrigins, unwrap, type BackgroundRequest, type PageStatus, type Settings, type TabState } from './shared';
 import { readSettings, storedSettings } from './settings';
 import { collectSourceContext } from './source-context';
 import { normalizeLanguage, validateContext } from './source-detector';
@@ -21,7 +21,7 @@ async function tabState(tabId: number, includeStatus = true): Promise<TabState> 
 async function reconcileSites(): Promise<void> {
   const config = await settings();
   const permitted: string[] = [];
-  for (const site of config.autoSites) if (await chrome.permissions.contains({ origins: [`*://${site}/*`] })) permitted.push(site);
+  for (const site of config.autoSites) if (await chrome.permissions.contains({ origins: siteOrigins(site) })) permitted.push(site);
   const registered = (await chrome.scripting.getRegisteredContentScripts()).filter(script => script.id.startsWith('site-'));
   const desired = new Set(permitted.map(site => `site-${site}`));
   const stale = registered.filter(script => !desired.has(script.id)).map(script => script.id);
@@ -29,9 +29,15 @@ async function reconcileSites(): Promise<void> {
   const existing = new Set(registered.map(script => script.id));
   const missing = permitted.filter(site => !existing.has(`site-${site}`));
   if (missing.length) await chrome.scripting.registerContentScripts(missing.map(site => ({
-    id: `site-${site}`, matches: [`*://${site}/*`], js: ['content.js'],
+    id: `site-${site}`, matches: siteOrigins(site), js: ['content.js'],
     allFrames: true, matchOriginAsFallback: true, runAt: 'document_idle', persistAcrossSessions: true,
   })));
+  const updates = permitted.flatMap(site => {
+    const script = registered.find(script => script.id === `site-${site}`);
+    const matches = siteOrigins(site);
+    return script && (script.matches?.length !== matches.length || !matches.every(pattern => script.matches?.includes(pattern))) ? [{ id: script.id, matches, js: ['content.js'] }] : [];
+  });
+  if (updates.length) await chrome.scripting.updateContentScripts(updates);
   if (permitted.length !== config.autoSites.length) await chrome.storage.local.set({ autoSites: permitted });
 }
 let initializing: Promise<void> | undefined;
@@ -150,10 +156,10 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
   });
   if (message.type === 'auto') return mutate(async () => {
     const tab = await chrome.tabs.get(message.tabId);
-    const pattern = originPattern(tab.url ?? '');
+    originPattern(tab.url ?? '');
     const site = siteKey(tab.url!);
     const config = await settings();
-    if (message.enabled && !await chrome.permissions.contains({ origins: [pattern] })) throw new Error('Allow access to this website to enable automatic translation.');
+    if (message.enabled && !await chrome.permissions.contains({ origins: siteOrigins(site) })) throw new Error('Allow access to this website to enable automatic translation.');
     const sites = new Set(config.autoSites);
     if (message.enabled) sites.add(site); else sites.delete(site);
     await chrome.storage.local.set({ autoSites: [...sites] });

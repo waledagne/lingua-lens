@@ -33,6 +33,12 @@ export function originPattern(url: string): string {
   if (!isWebsite(url)) throw new Error('Open a normal website first. Chrome protects this page from extensions.');
   return `*://${siteKey(url)}/*`;
 }
+export function siteOrigins(site: string): string[] {
+  // Each requested scheme must be contained by a declaration in optional_host_permissions.
+  // A combined *:// pattern is not contained by either separate http:// or https:// entry.
+  if (!site || site.includes('*') || new URL('https://' + site).hostname !== site) throw new Error('Choose a valid website hostname.');
+  return ['http://' + site + '/*', 'https://' + site + '/*'];
+}
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

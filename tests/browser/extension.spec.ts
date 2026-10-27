@@ -34,7 +34,7 @@ test.beforeAll(async () => {
   await mkdir(extension, { recursive: true });
   await cp('dist', extension, { recursive: true });
   const manifest = JSON.parse(await readFile(path.join(extension, 'manifest.json'), 'utf8'));
-  manifest.host_permissions = ['*://127.0.0.1/*', '*://localhost/*'];
+  manifest.host_permissions = ['http://127.0.0.1/*', 'https://127.0.0.1/*', 'http://localhost/*', 'https://localhost/*'];
   await writeFile(path.join(extension, 'manifest.json'), JSON.stringify(manifest));
   for (const file of ['engine.js', 'setup.js']) {
     const source = await readFile(path.join(extension, file), 'utf8');
@@ -144,14 +144,21 @@ test('late modal content and updates translate; buttons keep working and pause r
   await expect(shop.frameLocator('iframe').locator('p')).toHaveText('Treść ramki');
 });
 test('remembered sites translate after navigation and popup reflects live state', async () => {
-  await command('auto', true);
-  await shop.reload();
-  await expect(shop.locator('h1')).toHaveText('Welcome to the shop');
   // Open the popup in its own tab, then focus the website so activeTab lookup uses the website.
   const popup = await context.newPage();
   await shop.bringToFront();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   await expect(popup.locator('#site')).toHaveText('127.0.0.1');
+  await expect(popup.locator('#auto')).not.toBeChecked();
+  // Exercise the actual permissions.request() path, rather than bypassing the popup.
+  await popup.locator('#auto').check();
+  await expect(popup.locator('#error')).toBeHidden();
+  await expect(popup.locator('#auto')).toBeChecked();
+  await expect(shop.locator('h1')).toHaveText('Welcome to the shop');
+  const scripts = await worker.evaluate(() => chrome.scripting.getRegisteredContentScripts());
+  expect(scripts[0].matches).toEqual(['http://127.0.0.1/*', 'https://127.0.0.1/*']);
+  await shop.reload();
+  await expect(shop.locator('h1')).toHaveText('Welcome to the shop');
   await expect(popup.locator('#badge')).toHaveText('Live');
   await expect(popup.locator('#auto')).toBeChecked();
   await popup.locator('#toggle').click();

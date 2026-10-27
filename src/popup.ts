@@ -1,4 +1,4 @@
-import { errorMessage, languageName, pairLabel, request, type Settings, type TabState } from './shared';
+import { errorMessage, languageName, pairLabel, request, siteOrigins, type Settings, type TabState } from './shared';
 import { LanguageControls } from './language-controls';
 
 const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -87,7 +87,7 @@ auto.addEventListener('change', async () => {
   render(current);
   try {
     // Keep the permission request inside the click/change gesture for every hostname.
-    if (enabled && !await chrome.permissions.request({ origins: ['*://' + site + '/*'] })) throw new Error('Website access was not granted. You can still translate this page manually.');
+    if (enabled && !await chrome.permissions.request({ origins: siteOrigins(site) })) throw new Error('Website access was not granted. You can still translate this page manually.');
     await request<TabState>({ target: 'background', type: 'auto', tabId: tab.id, enabled });
   } catch (error) { actionError = errorMessage(error); }
   finally { busy = false; await refresh(); }

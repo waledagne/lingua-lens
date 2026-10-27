@@ -37,6 +37,7 @@ test('background migrates settings and manages languages and arbitrary websites'
       executeScript: async () => [{ result: { sample: 'Bonjour et bienvenue sur notre site. Voici les informations pour votre visite.', pageLanguage: 'fr' } }], getRegisteredContentScripts: async () => [...scripts.values()],
       unregisterContentScripts: async ({ ids }: { ids: string[] }) => { for (const id of ids) scripts.delete(id); },
       registerContentScripts: async (values: { id: string; matches: string[] }[]) => { for (const value of values) scripts.set(value.id, value); },
+      updateContentScripts: async (values: { id: string; matches: string[] }[]) => { for (const value of values) scripts.set(value.id, { ...scripts.get(value.id)!, ...value }); },
     },
     permissions: { contains: async ({ origins }: { origins: string[] }) => origins.every(origin => granted.has(origin)), onRemoved: event },
     offscreen: { Reason: { WORKERS: 'WORKERS' }, createDocument: async () => { contexts++; } },
@@ -65,12 +66,21 @@ test('background migrates settings and manages languages and arbitrary websites'
   });
   await t.test('every website needs its own permission for automatic translation', async () => {
     await assert.rejects(send({ target: 'background', type: 'auto', tabId: 1, enabled: true }), /Allow access/);
-    granted.add('*://news.example.com/*');
+    granted.add('https://news.example.com/*');
+    await assert.rejects(send({ target: 'background', type: 'auto', tabId: 1, enabled: true }), /Allow access/);
+    granted.add('http://news.example.com/*');
     const state = await send<TabState>({ target: 'background', type: 'auto', tabId: 1, enabled: true });
     assert.equal(state.enabled, true); assert.equal(state.site, 'news.example.com');
-    assert.deepEqual(scripts.get('site-news.example.com')!.matches, ['*://news.example.com/*']);
+    assert.deepEqual(scripts.get('site-news.example.com')!.matches, ['http://news.example.com/*', 'https://news.example.com/*']);
     assert.equal((await send<TabState>({ target: 'background', type: 'state', tabId: 2 })).enabled, false);
     await assert.rejects(send({ target: 'background', type: 'auto', tabId: 2, enabled: true }), /Allow access/);
+  });
+  await t.test('repairs saved wildcard registrations without dropping the remembered website', async () => {
+    scripts.set('site-news.example.com', { id: 'site-news.example.com', matches: ['*://news.example.com/*'] });
+    const state = await send<TabState>({ target: 'background', type: 'auto', tabId: 1, enabled: true });
+    assert.equal(state.enabled, true);
+    assert.deepEqual(state.autoSites, ['news.example.com']);
+    assert.deepEqual(scripts.get('site-news.example.com')!.matches, ['http://news.example.com/*', 'https://news.example.com/*']);
   });
   await t.test('routes the selected pair and rejects content scripts changing preferences', async () => {
     assert.deepEqual(await send({ target: 'background', type: 'translate', texts: ['Bonjour'], pair }, page), ['fr:de:Bonjour']);

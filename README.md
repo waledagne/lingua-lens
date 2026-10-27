@@ -70,7 +70,13 @@ npm run test:browser
 
 Browser tests launch a separate temporary profile and a test copy of the extension. Only that copy gets a deterministic fake Translator; **production `dist/` always calls the real Chrome API**. The browser suite is designed to verify the extension's routing, offscreen engine, worker, iframe support, dynamic DOM updates, restoration, and popup controls, not real translation quality. Unit tests exercise races and protected input handling. `LINGUA_LENS_BROWSER` can specify another Chrome for Testing executable when the downloaded default cannot launch.
 
-The latest completed checks passed TypeScript validation, the production build, and all 42 automated unit/integration tests. These include the actual popup, setup, and content scripts, detection confidence and regional codes, target-language passthrough, settings migration, per-site registration, pair-specific caching, and stale-response protection. Chrome's detector, translator, and extension APIs are mocked in these tests. The full browser suite remains blocked before launch by a Windows side-by-side configuration error; real model accuracy and live website flows remain to be verified.
+The latest completed checks passed TypeScript validation, the production build, and all 46 automated unit/integration tests. These include the actual popup, setup, and content scripts, detection confidence and regional codes, target-language passthrough, settings migration, per-site registration, pair-specific caching, and stale-response protection. The permission regression tests check requests against the real manifest declarations, permission denial, disabling without a new prompt, and migration of saved wildcard registrations. Chrome's detector, translator, and extension APIs are mocked in these tests. The full browser suite remains blocked before launch by a Windows side-by-side configuration error; real model accuracy and live website flows remain to be verified.
+
+## Troubleshooting automatic translation
+
+If **Always translate this site** reports `Only permissions specified in the manifest may be requested.`, reload the rebuilt extension from `chrome://extensions`, confirm version **0.3.1** or later, refresh the website, and retry the switch.
+
+The fix requests separate `http://hostname/*` and `https://hostname/*` permissions to match the manifest's optional scheme declarations. Permission checks and registered scripts use the same explicit patterns. Existing saved wildcard registrations are updated when the extension initializes. If you decline website access, automatic translation stays off and manual translation remains available.
 
 ## Architecture
 
