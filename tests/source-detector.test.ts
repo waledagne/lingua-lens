@@ -38,6 +38,15 @@ test('local detector is shared and successful page detections are cached', async
   assert.equal(await source.detect({ sample, pageLanguage: '' }), 'fr');
   assert.equal(created, 1); assert.equal(detected, 1);
 });
+test('a native detection hang discards the stuck detector and a retry recovers', async () => {
+  let created = 0, destroyed = 0;
+  const source = new SourceDetector(() => ({ availability: async () => 'available', create: async () => {
+    const run = ++created;
+    return { detect: async () => run === 1 ? new Promise<{ detectedLanguage: string; confidence: number }[]>(() => {}) : [{ detectedLanguage: 'fr', confidence: 0.99 }], destroy() { destroyed++; } };
+  } }), 20);
+  await assert.rejects(source.detect({ sample, pageLanguage: '' }), /stopped responding/);
+  assert.equal(await source.detect({ sample, pageLanguage: '' }), 'fr'); assert.equal(destroyed, 1); assert.equal(created, 2);
+});
 test('page samples exclude editable content and are safe to serialize into Chrome scripting', async () => {
   const window = new Window({ url: 'https://example.com' });
   try {

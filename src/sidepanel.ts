@@ -3,6 +3,7 @@ import { fillLanguages } from './language-controls';
 import { detectSource } from './source-detector';
 import { chunks } from './segment';
 import { detectorAPI, translatorAPI, type DownloadMonitor, type LocalLanguageDetector, type LocalTranslator } from './translator-api';
+import { MODEL_CHECK_MS, MODEL_DOWNLOAD_IDLE_MS, MODEL_DOWNLOAD_MAX_MS, modelTask } from './model-task';
 
 const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = get<HTMLTextAreaElement>('input-text');
@@ -94,26 +95,30 @@ translate.addEventListener('click', () => {
   const run = ++generation, abort = new AbortController(); controller = abort;
   error(); status('Preparing translation…'); render();
   const check = () => { if (generation !== run || abort.signal.aborted) throw new DOMException('Canceled', 'AbortError'); };
-  const monitor = (progress: DownloadMonitor) => progress.addEventListener('downloadprogress', event => {
-    if (generation === run) status('Downloading local language model… ' + Math.round(Math.max(0, Math.min(1, event.loaded)) * 100) + '%');
+  const monitor = (progress: DownloadMonitor, touch: (loaded: number) => void) => progress.addEventListener('downloadprogress', event => {
+    touch(event.loaded);
+    if (generation === run) status(event.loaded >= 1 ? 'Download complete. Chrome is preparing the local model…' : 'Downloading local language model… ' + Math.round(Math.max(0, Math.min(1, event.loaded)) * 100) + '%');
   });
   void (async () => {
     let detector: LocalLanguageDetector | undefined, translator: LocalTranslator | undefined;
+    const download = { signal: abort.signal, timeoutMs: MODEL_DOWNLOAD_IDLE_MS, maxMs: MODEL_DOWNLOAD_MAX_MS,
+      onWait: () => { if (generation === run) status('Still waiting for Chrome’s local model. The first download needs internet. You can cancel and retry.'); } };
     try {
       // A staged download starts here, in the click gesture, before any await.
-      if (action?.kind === 'detector') detector = await detectorAPI().create({ signal: abort.signal, monitor });
-      else if (action?.kind === 'translator') translator = await translatorAPI().create({ ...action.pair, signal: abort.signal, monitor });
+      if (action?.kind === 'detector') detector = await modelTask((signal, touch) => detectorAPI().create({ signal, monitor: progress => monitor(progress, touch) }), { ...download, dispose: value => value.destroy() });
+      else if (action?.kind === 'translator') translator = await modelTask((signal, touch) => translatorAPI().create({ ...action.pair, signal, monitor: progress => monitor(progress, touch) }), { ...download, dispose: value => value.destroy() });
       check();
       let actual = action?.kind === 'translator' ? action.pair.sourceLanguage : selected.sourceLanguage;
       if (actual === 'auto') {
         const api = detectorAPI();
         if (!detector) {
-          const available = await api.availability(); check();
+          const available = await modelTask(() => api.availability(), { signal: abort.signal, timeoutMs: MODEL_CHECK_MS }); check();
           if (available === 'unavailable') throw new Error('Automatic detection is unavailable. Choose a source language manually.');
           if (available !== 'available') { plan = { kind: 'detector' }; status('Enable automatic detection to download its local model.'); return; }
-          detector = await api.create({ signal: abort.signal }); check();
+          detector = await modelTask(signal => api.create({ signal }), { signal: abort.signal, dispose: value => value.destroy() }); check();
         }
-        actual = await detectSource(detector, { sample: text.slice(0, 6000), pageLanguage: languageHint }); check();
+        const activeDetector = detector;
+        actual = await modelTask(() => detectSource(activeDetector, { sample: text.slice(0, 6000), pageLanguage: languageHint }), { signal: abort.signal }); check();
         void request({ target: 'background', type: 'panel-models-ready', detector: true }).catch(() => {});
       }
       detected = actual;
@@ -122,16 +127,17 @@ translate.addEventListener('click', () => {
       if (actual === selected.targetLanguage) { resultText = text; status('Already in ' + languageName(actual) + '. Original text kept.'); }
       else {
         if (!translator) {
-          const api = translatorAPI(), available = await api.availability(concrete); check();
+          const api = translatorAPI(), available = await modelTask(() => api.availability(concrete), { signal: abort.signal, timeoutMs: MODEL_CHECK_MS }); check();
           if (available === 'unavailable') throw new Error('Chrome does not support ' + pairLabel(concrete) + ' on this device. Choose another language pair.');
           if (available !== 'available') { plan = { kind: 'translator', pair: concrete }; status('Download ' + pairLabel(concrete) + ' to translate locally.'); return; }
-          translator = await api.create({ ...concrete, signal: abort.signal }); check();
+          translator = await modelTask(signal => api.create({ ...concrete, signal }), { signal: abort.signal, dispose: value => value.destroy() }); check();
         }
         const pieces = chunks(text, 1800, actual), output: string[] = [];
         for (const [index, piece] of pieces.entries()) {
           check(); status('Translating… ' + (index + 1) + ' / ' + pieces.length);
           if (!piece.trim()) { output.push(piece); continue; }
-          const translated = await translator.translate(piece.trim()); check();
+          const instance = translator;
+          const translated = await modelTask(() => instance.translate(piece.trim()), { signal: abort.signal }); check();
           if (!translated?.trim()) throw new Error('Chrome returned an empty translation. Try again.');
           output.push(withPadding(piece, translated));
         }
@@ -160,3 +166,4 @@ void (async () => {
     status('Paste text or send a selection from a website.'); render(); await inbox();
   } catch (cause) { error(errorMessage(cause)); status('Reload the extension and reopen this panel.'); }
 })();
+window.addEventListener('pagehide', () => { generation++; controller?.abort(); });

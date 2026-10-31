@@ -30,6 +30,12 @@
       <div id="sample" class="sample" hidden><span id="sample-source" dir="auto"></span><span aria-hidden="true">↓</span><strong id="sample-result" dir="auto"></strong></div>
       <button id="finish-setup" class="primary" hidden>Translate &amp; return to website</button>
     </section>
+    <details class="preferences-card" id="troubleshooting"><summary>Troubleshooting &amp; diagnostics</summary>
+      <p>First-time models need internet. Keep this tab open. If preparation stalls, cancel and retry, check compatibility, or choose a source manually when detection is unavailable. If it keeps failing, update and restart Chrome.</p>
+      <p>Copy a report to share when asking for help. It contains your browser version, selected languages, and model availability. It includes no page text, website addresses, or browsing history.</p>
+      <button id="copy-diagnostics" class="secondary">Copy diagnostic report</button><p id="diagnostics-status" role="status" aria-live="polite"></p>
+      <pre id="diagnostics-report" class="diagnostics-report" tabindex="0" hidden></pre>
+    </details>
     <section class="preferences-card" aria-labelledby="understood-title">
       <h2 id="understood-title">Languages you already understand</h2>
       <p>Keep these languages in their original form during automatic page translation. Selected-text translation and a manual source choice still translate when you ask.</p>
@@ -40,6 +46,6 @@
     </section>
     <section class="next-step"><div class="step-label">02 <span>Translate a website</span></div><p>Open any ordinary website, click Lingua Lens in the toolbar, and choose <strong>Translate this page</strong>. Turn on <strong>Always translate this site</strong> if you want translation on future visits. Use <strong>Pause &amp; restore original</strong> to return to the source text.</p><p>Chrome settings, the Web Store, and other protected browser pages cannot be translated.</p></section>
     <section class="preferences-card"><h2>Quick actions</h2><p>Highlight text and right-click → <strong>Translate selection with Lingua Lens</strong>. Or use the toolbar's selected-text button.</p><ul id="shortcut-list"><li>Translate selection: Alt + Shift + Y</li><li>Translate / restore page: Alt + Shift + L</li></ul><p>Use <strong>Alt + Shift + O</strong> to reveal the original of selected translated text. In the toolbar, expand <strong>Languages &amp; reading</strong> to choose bilingual paragraphs.</p><p>On Mac, Alt is Option. Shortcuts may be unassigned if another app uses them.</p><button id="configure-shortcuts" class="secondary">Customize keyboard shortcuts</button></section>
-    <footer>Chrome 138+ on desktop · Windows &amp; macOS · On-device translation · Version 0.7.0</footer>
+    <footer>Chrome 138+ on desktop · Windows &amp; macOS · On-device translation · Version 0.8.0</footer>
   </main><script src="setup.js"></script>
 </body></html>

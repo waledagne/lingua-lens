@@ -56,3 +56,23 @@ test('reports an unprepared pair and bounds live translator sessions', async () 
   for (const targetLanguage of ['fr', 'de', 'es', 'ja']) await engine.translate(['Hello'], { ...pair, targetLanguage });
   assert.equal(destroyed, 1);
 });
+test('a hung translator releases the queue and the next request creates a fresh session', async () => {
+  let created = 0, destroyed = 0;
+  const engine = new TranslationEngine(() => ({ availability: async () => 'available', create: async () => {
+    const run = ++created;
+    return { translate: async text => run === 1 ? new Promise<string>(() => {}) : 'Recovered: ' + text, destroy() { destroyed++; } };
+  } }), async texts => texts.map(text => [text]), 20);
+  const pair = { sourceLanguage: 'pl', targetLanguage: 'en' };
+  await assert.rejects(engine.translate(['Witaj'], pair), /stopped responding/);
+  assert.equal(destroyed, 1); assert.deepEqual(await engine.translate(['Witaj'], pair), ['Recovered: Witaj']); assert.equal(created, 2);
+});
+test('an empty chunk fails without caching incomplete text, then retries with a new session', async () => {
+  let created = 0;
+  const engine = new TranslationEngine(() => ({ availability: async () => 'available', create: async () => {
+    const run = ++created;
+    return { translate: async text => run === 1 && text === 'two' ? '' : text.toUpperCase(), destroy() {} };
+  } }), async () => [['one ', 'two']]);
+  const pair = { sourceLanguage: 'pl', targetLanguage: 'en' };
+  await assert.rejects(engine.translate(['one two'], pair), /empty/);
+  assert.deepEqual(await engine.translate(['one two'], pair), ['ONE TWO']); assert.equal(created, 2);
+});

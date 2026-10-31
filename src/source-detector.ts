@@ -1,5 +1,6 @@
 import { LANGUAGES, languageName, type SourceContext } from './shared';
 import type { DetectorFactory, LocalLanguageDetector } from './translator-api';
+import { MODEL_CALL_MS, MODEL_CHECK_MS, modelTask } from './model-task';
 
 export function normalizeLanguage(value: string): string | null {
   const code = value.toLowerCase().replace(/_/gu, '-');
@@ -31,16 +32,22 @@ export async function detectSource(detector: LocalLanguageDetector, context: Sou
 export class SourceDetector {
   private instance?: Promise<LocalLanguageDetector>;
   private cache = new Map<string, string>();
-  constructor(private api: () => DetectorFactory) {}
+  constructor(private api: () => DetectorFactory, private timeoutMs = MODEL_CALL_MS) {}
   async detect(context: SourceContext): Promise<string> {
     const key = context.pageLanguage + '\0' + context.sample;
     if (this.cache.has(key)) return this.cache.get(key)!;
     if (!this.instance) this.instance = (async () => {
       const api = this.api();
-      if (await api.availability() !== 'available') throw new Error('Open Lingua Lens setup to enable automatic language detection first.');
-      return api.create();
+      if (await modelTask(() => api.availability(), { timeoutMs: Math.min(this.timeoutMs, MODEL_CHECK_MS) }) !== 'available') throw new Error('Open Lingua Lens setup to enable automatic language detection first.');
+      return modelTask(signal => api.create({ signal }), { timeoutMs: this.timeoutMs, dispose: value => value.destroy() });
     })().catch(error => { this.instance = undefined; throw error; });
-    const result = await detectSource(await this.instance, context);
+    const pending = this.instance, instance = await pending;
+    const result = await detectSource({
+      detect: text => modelTask(() => instance.detect(text), { timeoutMs: this.timeoutMs }).catch(cause => {
+        if (this.instance === pending) { this.instance = undefined; instance.destroy(); }
+        throw cause;
+      }), destroy() {},
+    }, context);
     this.cache.set(key, result);
     while (this.cache.size > 128) this.cache.delete(this.cache.keys().next().value!);
     return result;

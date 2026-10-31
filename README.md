@@ -14,6 +14,16 @@ Built with **TypeScript** for desktop **Google Chrome**, using Chrome's local tr
 
 Detection and translation use Chrome's local models. Additional translation providers remain future work.
 
+## Version 0.8: reliability and local testing
+
+Model downloads, compatibility checks, detection, and translation now have bounded waits. Cancel releases setup and panel controls even when a native call ignores abort; late model instances are discarded. A failed page translator is replaced on retry, and one stalled detector no longer creates a separate timeout for every remaining context in its batch. Empty translation chunks cannot be cached as a complete passage.
+
+Setup and the side panel distinguish a completed download from Chrome finishing model preparation, show an explanation after a long wait, and stop stalled downloads after two minutes without advancing progress (ten minutes maximum). Ordinary native inference calls have a 45-second limit; compatibility checks have 15 seconds. Downloads still require an explicit user gesture and Chrome's native APIs; no cloud fallback is added.
+
+Open **Languages & setup → Troubleshooting & diagnostics → Copy diagnostic report** for browser/extension versions, selected languages, native availability, and preparation flags. The report excludes page text, website addresses, browsing history, and full saved preferences. If clipboard access fails, select the displayed report manually.
+
+**No Web Store publication is needed for testing.** Load or reload `dist/` as an unpacked extension. Follow [your testing steps](docs/TESTING.md) and see [the verification record and remaining checks](docs/RELIABILITY.md). Automated browser and live-site DOM checks use simulated models; actual model readiness and translation quality remain separate checks.
+
 ## Version 0.7: translation workspace
 
 Open **Open translation panel** in the toolbar, or use `Alt+Shift+K` (Option+Shift+K on Mac, if assigned). Chrome's side panel stays beside your website as you switch tabs within the same window. The existing toolbar and in-page selection translator remain available.
@@ -88,7 +98,7 @@ The built extension is already in `dist/`.
 7. Use **Always translate this site** to enable translation on future visits. Chrome will request access to that hostname when needed.
 8. Use **Pause & restore original** to restore source text. Pausing lasts until navigation; disable the site switch to stop future automatic translation.
 
-After updating an existing unpacked installation, reload the extension in `chrome://extensions` and refresh any pages that were already translated. Version 0.7 preserves existing language choices, reading modes, prepared pairs, permitted automatic sites, exclusions, and understood languages. Open the panel from the toolbar to try the new workspace. It initially uses automatic detection and your default target until you choose panel languages. Older installations from before version 0.3 migrate to automatic detection while retaining the target and previous pack preparation.
+After updating an existing unpacked installation, reload the extension in `chrome://extensions` and refresh any pages that were already translated. Version 0.8 preserves existing language choices, reading modes, panel preferences, prepared pairs, permitted automatic sites, exclusions, and understood languages. Open Languages & setup to try the new diagnostic report. Older installations from before version 0.3 migrate to automatic detection while retaining the target and previous pack preparation.
 
 Chrome performs the first language-pack download. Availability depends on Chrome, its policies, your device, and the requested pair; setup reports failures instead of silently sending text to a server. No cloud fallback or API key is configured.
 
@@ -118,13 +128,15 @@ Browser tests launch a separate temporary profile and a test copy of the extensi
 
 Use `npm run browser:doctor` to launch the unmodified production extension and print the real browser version and native model availability. It does not call model creation; Chrome may perform its normal background component updates. Native checks re-enable the model services, component updates, and background networking that Playwright normally suppresses, while retaining unrelated launch defaults. A successful launch does not mean models are available or translation works.
 
-The latest corrected native availability check reported both Language Detector and Polish → English as `downloadable`. Actual detector and Spanish → French setup attempts did not finish within the 90-second test window. Native download completion and accuracy are not verified by the passing automated suite.
+The native availability check reports Language Detector and Polish → English as `downloadable`. Model readiness and accuracy remain unverified; a baseline Polish → English setup reached 100% downloaded without returning a usable translator. See [the verification record](docs/RELIABILITY.md) for native outcomes, accessible public sites, blocked sites, and the long-page measurement.
 
-`npm run browser:smoke` attempts actual detector preparation and Polish → English / Spanish → French sample translations through production setup. It can download models, reports failures with a nonzero exit code, and uses only the ignored `work/native-model-profile` profile. It resets that profile's extension preferences on each run while retaining Chrome's downloaded models. After building, use `node --import tsx scripts/browser-smoke.ts --translation-only` to check translation without waiting for detector preparation. No personal Chrome profile is used. Downloads are given 90 seconds per stage; a timeout does not prove that the language is unsupported.
+`npm run browser:smoke` attempts real detector inference and Polish → English / Spanish → French sample translations through production setup. It can download models, reports failures with a nonzero exit code, and uses only the ignored `work/native-model-profile` profile. It resets that profile's extension preferences on each run while retaining Chrome's downloaded models. Results and component metrics are saved to `work/native-verification.json`. The default stage allowance is 150 seconds; after building, use `node --import tsx scripts/browser-smoke.ts --timeout-ms=300000` to change it, or add `--translation-only` to skip detection. App-level idle and total timeouts still apply. No personal Chrome profile is used; a timeout does not establish that a language is unsupported.
+
+`npm run test:sites` checks configured public websites with a separate extension copy and a simulated translator. It verifies DOM integration and writes `work/website-verification.json`; it does not validate translation quality. Site blocks are reported as incomplete. See [testing commands and report formats](docs/TESTING.md).
 
 The Windows runtime workaround follows the private-assembly requirement that manifests accompany their DLLs. [Microsoft assembly documentation](https://learn.microsoft.com/en-us/windows/win32/sbscs/assembly-manifests). The persistent, isolated Chromium launch follows [Playwright's extension-testing guidance](https://playwright.dev/docs/chrome-extensions).
 
-Validation covers TypeScript checking, the production build, 107 unit/integration tests, and 15 browser tests in Chrome for Testing 156.0.8078.4. Tests cover UI/content scripts, detection, migration, permissions, caching, stale responses, runtime preparation, per-site settings, exclusion across tabs, selection and frames, copy, assigned commands, and cancelled setup. Reading and mixed-language tests cover inline context, language boundaries, source-specific duplicate labels, missing-pack isolation and recovery, understood-language passthrough, live language/visibility changes, protected drafts, shadow roots, restoration, and original reveal without a model request. Panel tests cover staged user-gesture downloads, independent preferences, draft handoffs, cancellation, oversized input, copying, and narrow layouts. Browser coverage opens a real native side panel and captures and translates a page selection inside it. The browser suite exercises real extension APIs with deterministic models; keyboard and context-menu event routing is also tested with mocks. Real native-model completion, accuracy, Mac compatibility, and live commercial website flows remain release verification tasks.
+Validation covers TypeScript checking, the production build, 119 unit/integration tests, and 16 browser tests in Chrome for Testing 156.0.8078.4. Tests cover UI/content scripts, detection, migration, permissions, caching, stale responses, runtime preparation, per-site settings, exclusion across tabs, selection and frames, copy, assigned commands, and cancelled setup. Reading and mixed-language tests cover inline context, language boundaries, source-specific duplicate labels, missing-pack isolation and recovery, understood-language passthrough, live language/visibility changes, protected drafts, shadow roots, restoration, and original reveal without a model request. Panel tests cover staged user-gesture downloads, independent preferences, draft handoffs, cancellation, oversized input, copying, and narrow layouts. Browser coverage opens a real native side panel and captures and translates a page selection inside it. The browser suite exercises real extension APIs with deterministic models; keyboard and context-menu event routing is also tested with mocks. Real native-model completion, accuracy, Mac compatibility, and live commercial website flows remain release verification tasks.
 
 ## Troubleshooting automatic translation
 
@@ -142,6 +154,8 @@ The fix requests separate `http://hostname/*` and `https://hostname/*` permissio
 | `src/background.ts` | Tab state, settings, optional site access, script registration, engine lifecycle |
 | `src/engine.ts` | Offscreen messaging and the sentence-segmentation worker |
 | `src/translation-engine.ts` | Sequential queue, per-pair translation caches, and a bounded pool of Translator sessions |
+| `src/model-task.ts` | Gesture-preserving native calls, bounded waits, cancellation, and cleanup of late model instances |
+| `src/diagnostics.ts` | Metadata-only browser/model diagnostic report |
 | `src/source-detector.ts` | Local detector lifecycle, confidence checks, regional-language normalization, and bounded detection cache |
 | `src/passage-engine.ts` | Validate passage batches, detect sources, group translation by language, and isolate failures |
 | `src/passage-context.ts` / `src/dom-language.ts` | Sample original local context, honor language boundaries, and inherit metadata across shadow hosts |

@@ -2,8 +2,21 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PassageEngine, validatePassages } from '../src/passage-engine.ts';
 import { MAX_PASSAGE_CONTEXT, pairKey, type SourceContext } from '../src/shared.ts';
+import { ModelTimeoutError } from '../src/model-task.ts';
 
 const context = (pageLanguage: string, sample = 'A passage for language detection.'): SourceContext => ({ sample, pageLanguage });
+test('one detector timeout stops repeated native waits within a batch and retains already detected groups', async () => {
+  let calls = 0, failed = true;
+  const engine = new PassageEngine(async context => {
+    calls++; if (failed && context.pageLanguage === 'es') throw new ModelTimeoutError(); return context.pageLanguage;
+  }, async texts => texts.map(text => 'Translated: ' + text));
+  const contexts = ['fr', 'es', 'de', 'pl'].map(code => context(code));
+  const result = await engine.run(['Bonjour', 'Hola', 'Hallo', 'Witaj'], contexts, 'en', []);
+  assert.equal(calls, 2); assert.equal(result.translations[0], 'Translated: Bonjour');
+  assert.ok(result.issues.slice(1).every(issue => issue?.message.includes('stopped responding')));
+  failed = false; const retry = await engine.run(['Hola'], [context('es')], 'en', []);
+  assert.equal(retry.translations[0], 'Translated: Hola'); assert.equal(calls, 3);
+});
 
 test('passages route by source, deduplicate detection context, and skip understood and target languages', async () => {
   let detections = 0;

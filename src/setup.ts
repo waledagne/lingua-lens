@@ -2,6 +2,8 @@ import { errorMessage, LANGUAGES, languageName, pairKey, pairLabel, request, sam
 import { detectorAPI, translatorAPI, type DownloadMonitor, type LocalLanguageDetector } from './translator-api';
 import { detectSource, normalizeLanguage } from './source-detector';
 import { LanguageControls } from './language-controls';
+import { MODEL_CHECK_MS, MODEL_DOWNLOAD_IDLE_MS, MODEL_DOWNLOAD_MAX_MS, modelTask } from './model-task';
+import { diagnostics } from './diagnostics';
 
 const prepare = document.getElementById('prepare') as HTMLButtonElement;
 const progress = document.getElementById('progress') as HTMLProgressElement;
@@ -73,7 +75,7 @@ async function checkAvailability(): Promise<void> {
   try {
     let actualPair = selected;
     if (selected.sourceLanguage === 'auto') {
-      const factory = detectorAPI(), availability = await factory.availability();
+      const factory = detectorAPI(), availability = await modelTask(() => factory.availability(), { timeoutMs: MODEL_CHECK_MS });
       if (sequence !== checkSequence) return;
       if (availability === 'unavailable') throw new Error('Chrome cannot provide automatic language detection on this device. Update Chrome or choose a source manually.');
       if (availability !== 'available' || !current.detectorReady) {
@@ -82,14 +84,16 @@ async function checkAvailability(): Promise<void> {
         status.textContent = 'First, prepare the local language detector. A detected source may need a separate language-pack download.';
         return;
       }
-      const instance = detector ?? await factory.create();
+      const instance = detector ?? await modelTask(signal => factory.create({ signal }), { dispose: value => value.destroy() });
       if (sequence !== checkSequence) { if (instance !== detector) instance.destroy(); return; }
       detector = instance;
       const context = requestedSource ? null : await pageContext();
       if (sequence !== checkSequence) return;
       // A real sample translation makes first-run setup testable without a website.
       const demoSource = selected.targetLanguage === 'es' ? 'fr' : 'es';
-      detected = requestedSource ?? (context ? await detectSource(instance, context) : demoSource);
+      detected = requestedSource ?? (context ? await modelTask(() => detectSource(instance, context)).catch(cause => {
+        if (detector === instance) { detector = undefined; instance.destroy(); } throw cause;
+      }) : demoSource);
       if (sequence !== checkSequence) return;
       detectedLabel.hidden = false;
       detectedLabel.textContent = (requestedSource ? 'Language pack: ' : context ? 'Detected page language: ' : 'Practice sample: ') + languageName(detected);
@@ -101,7 +105,7 @@ async function checkAvailability(): Promise<void> {
       }
       actualPair = { sourceLanguage: detected, targetLanguage: selected.targetLanguage };
     }
-    const availability = await translatorAPI().availability(actualPair);
+    const availability = await modelTask(() => translatorAPI().availability(actualPair), { timeoutMs: MODEL_CHECK_MS });
     if (sequence !== checkSequence) return;
     if (availability === 'unavailable') throw new Error('Chrome cannot provide ' + pairLabel(actualPair) + ' on this device. Choose another target, or choose a source manually if detection is wrong.');
     plan = { type: 'translation', key: pairKey(selected), actualPair };
@@ -138,11 +142,11 @@ controls.apply.addEventListener('click', async () => {
   } catch (error) { showError(error); }
   finally { busy = false; updateForm(); if (!dirty) await checkAvailability(); }
 });
-function monitorDownload(monitor: DownloadMonitor, signal: AbortSignal): void {
+function monitorDownload(monitor: DownloadMonitor, signal: AbortSignal, touch: (loaded: number) => void): void {
   monitor.addEventListener('downloadprogress', event => {
     if (signal.aborted || !busy) return;
-    progress.value = event.loaded;
-    status.textContent = 'Downloading local model… ' + String(Math.round(event.loaded * 100)) + '%';
+    touch(event.loaded); progress.value = event.loaded;
+    status.textContent = event.loaded >= 1 ? 'Download complete. Chrome is preparing the local model…' : 'Downloading local model… ' + String(Math.round(event.loaded * 100)) + '%';
   });
 }
 prepare.addEventListener('click', async () => {
@@ -154,20 +158,22 @@ prepare.addEventListener('click', async () => {
   prepare.disabled = true; errorBox.hidden = true; progress.value = 0; progress.hidden = false;
   status.textContent = 'Preparing ' + pairLabel(selected) + '… Keep this tab open.';
   let detectorStage = false;
+  const download = { signal, timeoutMs: MODEL_DOWNLOAD_IDLE_MS, maxMs: MODEL_DOWNLOAD_MAX_MS,
+    onWait: () => { status.textContent = 'Still waiting for Chrome’s local model. The first download needs internet. You can cancel and retry; no page text is uploaded.'; } };
   try {
     if (action.type === 'detector') {
       // First-download activation is preserved by creating directly in this click.
       detector?.destroy();
       detector = undefined;
-      detector = await detectorAPI().create({ signal, monitor: monitor => monitorDownload(monitor, signal) });
+      detector = await modelTask((taskSignal, touch) => detectorAPI().create({ signal: taskSignal, monitor: monitor => monitorDownload(monitor, taskSignal, touch) }), { ...download, dispose: value => value.destroy() });
       signal.throwIfAborted();
       current = await request<Settings>({ target: 'background', type: 'ready', pair: selected, tabId: setupTab() });
       detectorStage = true;
     } else if (action.type === 'translation') {
       const actualPair = action.actualPair!;
-      const instance = await translatorAPI().create({ ...actualPair, signal, monitor: monitor => monitorDownload(monitor, signal) });
+      const instance = await modelTask((taskSignal, touch) => translatorAPI().create({ ...actualPair, signal: taskSignal, monitor: monitor => monitorDownload(monitor, taskSignal, touch) }), { ...download, dispose: value => value.destroy() });
       try {
-        const source = sampleText(actualPair.sourceLanguage), sample = await instance.translate(source);
+        const source = sampleText(actualPair.sourceLanguage), sample = await modelTask(() => instance.translate(source), { signal });
         signal.throwIfAborted();
         if (!sample.trim()) throw new Error('Chrome returned an empty translation. Please try again.');
         current = await request<Settings>({ target: 'background', type: 'ready', pair: selected, detectedSource: selected.sourceLanguage === 'auto' ? actualPair.sourceLanguage : undefined, tabId: setupTab() });
@@ -192,6 +198,20 @@ prepare.addEventListener('click', async () => {
   }
 });
 retry.addEventListener('click', () => { void checkAvailability(); });
+document.getElementById('copy-diagnostics')!.addEventListener('click', async () => {
+  if (!current) return;
+  const button = document.getElementById('copy-diagnostics') as HTMLButtonElement;
+  const report = document.getElementById('diagnostics-report')!;
+  const note = document.getElementById('diagnostics-status')!;
+  button.disabled = true; note.textContent = 'Checking local model availability…';
+  try {
+    const selected = plan?.actualPair ?? controls.read();
+    report.textContent = await diagnostics(selected, current); report.hidden = false;
+    try { await navigator.clipboard.writeText(report.textContent); note.textContent = 'Diagnostic report copied. No page text or website addresses included.'; }
+    catch { note.textContent = 'Select and copy the report below. Chrome could not write to the clipboard.'; }
+  } catch (cause) { note.textContent = errorMessage(cause); }
+  finally { button.disabled = false; }
+});
 cancel.addEventListener('click', () => setupAbort?.abort());
 finish.addEventListener('click', async () => {
   if (contextTab === null || busy || dirty) return;

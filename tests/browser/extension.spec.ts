@@ -522,3 +522,33 @@ test('toolbar opens a real Chrome side panel and assigns its keyboard command', 
   await cdp.detach();
   await command('toggle', true);
 });
+
+test('diagnostics copy metadata without page text, and a long page lets new dialogs take priority', async () => {
+  await control.locator('#troubleshooting > summary').click();
+  await control.getByRole('button', { name: 'Copy diagnostic report' }).click();
+  await expect(control.locator('#diagnostics-status')).toContainText('copied');
+  const report = JSON.parse(await control.locator('#diagnostics-report').innerText());
+  expect(report.extension).toBe('Lingua Lens'); expect(report.browser).toContain('Chrome');
+  expect(JSON.stringify(report)).not.toContain('127.0.0.1'); expect(report).not.toHaveProperty('sample');
+  await command('toggle', false); await shop.goto(origin);
+  await control.getByLabel('Source language', { exact: true }).selectOption('pl');
+  await control.getByLabel('Target language', { exact: true }).selectOption('en');
+  await control.getByRole('button', { name: 'Apply languages' }).click();
+  await shop.evaluate(() => {
+    const section = document.createElement('section'); section.id = 'long-page';
+    for (let i = 0; i < 600; i++) { const p = document.createElement('p'); p.textContent = 'Informacje o produkcie i sposobie dostawy numer ' + i; section.append(p); }
+    const input = document.createElement('textarea'); input.value = 'Keep my draft'; section.append(input); document.body.append(section);
+  });
+  const start = Date.now(); await command('toggle', true);
+  await shop.locator('#open').click();
+  await expect(shop.locator('dialog h2')).toHaveText('Delivery method');
+  const pendingAtDialog = (await control.evaluate(tabId => chrome.runtime.sendMessage({ target: 'background', type: 'state', tabId }), tabId)).data.status.pending;
+  expect(pendingAtDialog).toBeGreaterThan(0);
+  await shop.locator('#close').click();
+  await expect(shop.locator('#long-page p').last()).toHaveText('English: Informacje o produkcie i sposobie dostawy numer 599', { timeout: 30000 });
+  const elapsedMs = Date.now() - start;
+  await expect(shop.locator('#long-page textarea')).toHaveValue('Keep my draft');
+  await command('toggle', false);
+  await expect(shop.locator('#long-page p').last()).toHaveText('Informacje o produkcie i sposobie dostawy numer 599');
+  await writeFile('work/long-page-verification.json', JSON.stringify({ browser: context.browser()?.version(), modelMode: 'simulated', paragraphs: 600, elapsedMs, pendingAtDialog, draftPreserved: true, restoration: true }, null, 2) + '\n');
+});

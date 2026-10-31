@@ -9,7 +9,7 @@ async function until(check: () => boolean): Promise<void> {
   for (let i = 0; i < 300; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.ok(check(), 'UI did not reach the expected state');
 }
-async function ui(t: TestContext, name: 'popup' | 'setup', website = true, options: { context?: SourceContext; detectedSource?: string; detectorReady?: boolean; pageStatus?: PageStatus; permissionGranted?: boolean; autoSite?: boolean; detectionUnavailable?: boolean; sitePair?: Settings['pair']; never?: boolean; pendingDownload?: boolean; sourceHint?: string } = {}) {
+async function ui(t: TestContext, name: 'popup' | 'setup', website = true, options: { context?: SourceContext; detectedSource?: string; detectorReady?: boolean; pageStatus?: PageStatus; permissionGranted?: boolean; autoSite?: boolean; detectionUnavailable?: boolean; sitePair?: Settings['pair']; never?: boolean; pendingDownload?: boolean | 'ignore-abort'; sourceHint?: string } = {}) {
   const parameters = new URLSearchParams();
   if (options.context) parameters.set('tabId', '1');
   if (options.sourceHint) parameters.set('source', options.sourceHint);
@@ -70,7 +70,7 @@ async function ui(t: TestContext, name: 'popup' | 'setup', website = true, optio
   Object.assign(window, { chrome: mock, LanguageDetector: { availability: async () => options.detectionUnavailable ? 'unavailable' : 'available', create: async () => ({ detect: async () => [{ detectedLanguage: options.detectedSource ?? 'fr', confidence: 0.99 }], destroy() {} }) }, Translator: {
     availability: async (pair: Settings['pair']) => pair.sourceLanguage === 'fr' && pair.targetLanguage === 'ja' ? 'unavailable' : options.pendingDownload ? 'downloadable' : 'available',
     create: async (pair: Settings['pair'] & { signal?: AbortSignal }) => {
-      if (options.pendingDownload) return new Promise((_resolve, reject) => { pair.signal?.addEventListener('abort', () => reject(new window.DOMException('Setup aborted', 'AbortError')), { once: true }); });
+      if (options.pendingDownload) return new Promise((_resolve, reject) => { if (options.pendingDownload !== 'ignore-abort') pair.signal?.addEventListener('abort', () => reject(new window.DOMException('Setup aborted', 'AbortError')), { once: true }); });
       prepared.push(pairKey(pair)); return { translate: async (text: string) => pairKey(pair) + ':' + text, destroy() {} };
     },
   } });
@@ -254,6 +254,15 @@ test('a stalled model download can be cancelled without saving readiness and set
   assert.equal(button('cancel-setup').hidden, true);
   assert.equal(messages.some(message => message.type === 'ready'), false);
   assert.equal((document.getElementById('source-language') as HTMLSelectElement).disabled, false);
+});
+test('setup cancellation releases the controls even when the native create call ignores abort', async t => {
+  const { document, button, select, messages } = await ui(t, 'setup', true, { pendingDownload: 'ignore-abort' });
+  select('source-language', 'es'); select('target-language', 'fr'); button('apply-languages').click();
+  await until(() => !button('prepare').disabled); button('prepare').click();
+  await until(() => !button('cancel-setup').hidden); button('cancel-setup').click();
+  await until(() => !button('prepare').disabled && !!button('cancel-setup').hidden);
+  assert.equal((document.getElementById('source-language') as HTMLSelectElement).disabled, false);
+  assert.equal(messages.some(message => message.type === 'ready'), false);
 });
 
 test('reading modes save to the chosen scope and site reset restores inherited settings', async t => {
