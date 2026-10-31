@@ -1,6 +1,6 @@
 {
   "name": "lingua-lens",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Continuous website translation between your chosen languages in Chrome.",
@@ -11,6 +11,7 @@
     "test": "node scripts/test.mjs",
     "browser:prepare": "node --import tsx scripts/prepare-browser.ts",
     "browser:doctor": "npm run build && node --import tsx scripts/browser-doctor.ts",
+    "browser:smoke": "npm run build && node --import tsx scripts/browser-smoke.ts",
     "test:browser": "npm run build && playwright test",
     "check": "npm run typecheck && npm test && npm run build"
   },

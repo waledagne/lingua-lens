@@ -1,7 +1,8 @@
-import { errorMessage, isWebsite, MAX_BATCH, MAX_TEXT, originPattern, pairKey, parsePair, siteKey, siteOrigins, unwrap, type BackgroundRequest, type PageStatus, type Settings, type TabState } from './shared';
-import { readSettings, storedSettings } from './settings';
+import { errorMessage, isWebsite, LANGUAGES, MAX_BATCH, MAX_TEXT, originPattern, pairKey, pairLabel, parsePair, siteKey, siteOrigins, unwrap, type BackgroundRequest, type PageStatus, type SelectionView, type Settings, type TabState } from './shared';
+import { forSite, readSettings, storedSettings } from './settings';
 import { collectSourceContext } from './source-context';
 import { normalizeLanguage, validateContext } from './source-detector';
+import { readSelection } from './selection';
 
 async function settings(): Promise<Settings> {
   return readSettings(await chrome.storage.local.get(null));
@@ -16,7 +17,9 @@ async function tabState(tabId: number, includeStatus = true): Promise<TabState> 
   const override = storedOverride?.site === site && typeof storedOverride.enabled === 'boolean' ? storedOverride.enabled : undefined;
   let status: PageStatus | null = null;
   if (includeStatus) try { status = await chrome.tabs.sendMessage(tabId, { target: 'page', type: 'status' }, { frameId: 0 }); } catch { /* Not injected yet. */ }
-  return { ...config, site, status, enabled: !!site && config.ready && (override ?? config.autoSites.includes(site)) };
+  const effective = forSite(config, site), sitePreference = config.sitePreferences?.[site];
+  return { ...effective, defaultPair: config.pair, sitePreference, site, status,
+    enabled: !!site && !sitePreference?.never && effective.ready && (override ?? config.autoSites.includes(site)) };
 }
 async function reconcileSites(): Promise<void> {
   const config = await settings();
@@ -86,12 +89,56 @@ function mutate<T>(operation: () => Promise<T>): Promise<T> {
   mutations = task.catch(() => {});
   return task;
 }
+const selections = new Map<number, string>();
+async function translateSelection(tabId: number, frameId?: number): Promise<void> {
+  const id = crypto.randomUUID();
+  selections.set(tabId, id);
+  const state = await tabState(tabId, false);
+  if (!state.site) throw new Error('Open a normal website to translate selected text.');
+  await inject(tabId);
+  if (selections.get(tabId) !== id) return;
+  let captures: chrome.scripting.InjectionResult<ReturnType<typeof readSelection>>[];
+  try { captures = await chrome.scripting.executeScript({ target: frameId === undefined ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] }, func: readSelection }); }
+  catch { captures = await chrome.scripting.executeScript({ target: { tabId }, func: readSelection }); }
+  const capture = captures.find(item => item.result?.text && item.result.focused) ?? captures.find(item => item.result?.text) ?? captures[0];
+  const text = capture?.result?.text ?? '', destination = { frameId: capture?.frameId ?? 0 };
+  const view: SelectionView = { id, original: text.length <= MAX_TEXT ? text : '', label: pairLabel(state.pair) };
+  if (selections.get(tabId) !== id) return;
+  await chrome.tabs.sendMessage(tabId, { target: 'page', type: 'selection-close' }).catch(() => {});
+  if (selections.get(tabId) !== id) return;
+  await chrome.tabs.sendMessage(tabId, { target: 'page', type: 'selection-view', view }, destination);
+  try {
+    if (state.sitePreference?.never) throw new Error('Turn off Never translate this site in the toolbar before translating.');
+    if (!text) throw new Error('Select some text on the page first. Text inside editing fields is excluded.');
+    if (text.length > MAX_TEXT) throw new Error('Select a shorter passage (up to 12,000 characters).');
+    if (!state.ready) throw new Error('Prepare your languages in setup, then translate this selection again.');
+    await engine();
+    const source = state.pair.sourceLanguage === 'auto' ? unwrap<string>(await chrome.runtime.sendMessage({ target: 'engine', type: 'detect', context: { sample: text.slice(0, 6000), pageLanguage: capture?.result?.pageLanguage ?? '' } })) : state.pair.sourceLanguage;
+    view.label = pairLabel({ sourceLanguage: source, targetLanguage: state.pair.targetLanguage });
+    const translated = source === state.pair.targetLanguage ? [text] : unwrap<string[]>(await chrome.runtime.sendMessage({ target: 'engine', type: 'translate', texts: [text], pair: { sourceLanguage: source, targetLanguage: state.pair.targetLanguage } }));
+    if (typeof translated[0] !== 'string' || !translated[0].trim()) throw new Error('Chrome returned no translation. Try again.');
+    const latest = await tabState(tabId, false);
+    if (latest.site !== state.site || pairKey(latest.pair) !== pairKey(state.pair) || latest.sitePreference?.never) throw new Error('Translation settings changed. Select the passage and try again.');
+    view.result = translated[0];
+  } catch (error) { view.error = errorMessage(error); }
+  if (selections.get(tabId) === view.id) await chrome.tabs.sendMessage(tabId, { target: 'page', type: 'selection-view', view }, destination).catch(() => {});
+}
+async function openSetup(tabId?: number, issue?: string): Promise<void> {
+  const url = new URL(chrome.runtime.getURL('setup.html'));
+  if (tabId !== undefined) url.searchParams.set('tabId', String(tabId));
+  if (issue) url.searchParams.set('issue', issue);
+  await chrome.tabs.create({ url: url.href });
+}
 async function handle(message: BackgroundRequest, sender: chrome.runtime.MessageSender): Promise<unknown> {
   await initialize();
   if (message.type === 'state') {
     const tabId = sender.url?.startsWith(chrome.runtime.getURL('')) ? message.tabId : sender.tab?.id;
     if (tabId === undefined) return settings();
     return tabState(tabId);
+  }
+  if (message.type === 'open-setup') {
+    if (sender.tab?.id === undefined) throw new Error('Open setup from a webpage or the toolbar.');
+    await openSetup(sender.tab.id); return null;
   }
   if (message.type === 'detect') {
     if (sender.tab?.id === undefined) throw new Error('Language detection must come from a webpage.');
@@ -113,7 +160,7 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
     if (pairKey(pair) !== pairKey(state.pair)) throw new Error('The selected languages changed. Retry translation.');
     const sourceLanguage = pair.sourceLanguage === 'auto' ? message.sourceLanguage : pair.sourceLanguage;
     if (!sourceLanguage || normalizeLanguage(sourceLanguage) !== sourceLanguage || (pair.sourceLanguage !== 'auto' && message.sourceLanguage && message.sourceLanguage !== pair.sourceLanguage)) throw new Error('Detect or select a supported source language before translating.');
-    if (sourceLanguage === pair.targetLanguage) return message.texts;
+    if (sourceLanguage === pair.targetLanguage || (pair.sourceLanguage === 'auto' && state.understoodLanguages?.includes(sourceLanguage))) return message.texts;
     await engine();
     return unwrap<string[]>(await chrome.runtime.sendMessage({ target: 'engine', type: 'translate', texts: message.texts, pair: { sourceLanguage, targetLanguage: pair.targetLanguage } }));
   }
@@ -127,14 +174,39 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
   }
   if (message.type === 'languages') return mutate(async () => {
     const pair = parsePair(message.pair);
-    await chrome.storage.local.set({ pair });
+    if (message.tabId !== undefined) {
+      const state = await tabState(message.tabId, false);
+      if (!state.site) throw new Error('Open a website to save its languages.');
+      await chrome.storage.local.set({ sitePreferences: { ...state.sitePreferences, [state.site]: { ...state.sitePreference, pair } } });
+    } else await chrome.storage.local.set({ pair });
+    await refreshTabs();
+    return message.tabId === undefined ? settings() : tabState(message.tabId);
+  });
+  if (message.type === 'site-preference') return mutate(async () => {
+    const state = await tabState(message.tabId, false);
+    if (!state.site) throw new Error('Open a website to change its preferences.');
+    const preference = { ...state.sitePreference };
+    if (message.resetPair) delete preference.pair;
+    if (message.never !== undefined) preference.never = message.never;
+    await chrome.storage.local.set({ sitePreferences: { ...state.sitePreferences, [state.site]: preference },
+      autoSites: preference.never ? state.autoSites.filter(site => site !== state.site) : state.autoSites });
+    await reconcileSites();
+    if (message.never !== undefined) await chrome.storage.session.remove(`tab:${message.tabId}`);
+    await refreshTabs();
+    return tabState(message.tabId);
+  });
+  if (message.type === 'understood-languages') return mutate(async () => {
+    if (!Array.isArray(message.languages) || !message.languages.every(code => LANGUAGES.some(([language]) => language === code))) throw new Error('Choose supported languages.');
+    await chrome.storage.local.set({ understoodLanguages: [...new Set(message.languages)] });
     await refreshTabs();
     return settings();
   });
+  if (message.type === 'selection') { await translateSelection(message.tabId); return null; }
   if (message.type === 'ready') return mutate(async () => {
     const pair = parsePair(message.pair);
     const config = await settings();
-    if (pairKey(pair) !== pairKey(config.pair)) throw new Error('Languages changed in another window. Select the current pair and try setup again.');
+    const selected = message.tabId === undefined ? config : await tabState(message.tabId, false);
+    if (pairKey(pair) !== pairKey(selected.pair)) throw new Error('Languages changed in another window. Select the current pair and try setup again.');
     if (pair.sourceLanguage === 'auto') {
       const source = message.detectedSource;
       if (source && normalizeLanguage(source) !== source) throw new Error('Invalid detected source language.');
@@ -142,10 +214,11 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
       await chrome.storage.local.set({ detectorReady: true, preparedPairs });
     } else await chrome.storage.local.set({ preparedPairs: [...new Set([...config.preparedPairs, pairKey(pair)])] });
     await refreshTabs();
-    return settings();
+    return message.tabId === undefined ? settings() : tabState(message.tabId);
   });
   if (message.type === 'toggle') return mutate(async () => {
-    const config = await settings();
+    const config = await tabState(message.tabId, false);
+    if (message.enabled && config.sitePreference?.never) throw new Error('Turn off Never translate this site first.');
     if (message.enabled && !config.ready) throw new Error('Complete local translation setup first.');
     const tab = await chrome.tabs.get(message.tabId);
     originPattern(tab.url ?? '');
@@ -159,6 +232,7 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
     originPattern(tab.url ?? '');
     const site = siteKey(tab.url!);
     const config = await settings();
+    if (message.enabled && config.sitePreferences?.[site]?.never) throw new Error('Turn off Never translate this site first.');
     if (message.enabled && !await chrome.permissions.contains({ origins: siteOrigins(site) })) throw new Error('Allow access to this website to enable automatic translation.');
     const sites = new Set(config.autoSites);
     if (message.enabled) sites.add(site); else sites.delete(site);
@@ -166,7 +240,7 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
     await reconcileSites();
     // The checkbox also applies to the current tab; turning it off restores originals.
     await chrome.storage.session.set({ [`tab:${message.tabId}`]: { site, enabled: message.enabled } });
-    if (message.enabled && config.ready) await inject(message.tabId);
+    if (message.enabled && forSite(config, site).ready) await inject(message.tabId);
     await refreshTabs();
     return tabState(message.tabId);
   });
@@ -179,12 +253,33 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   );
   return true;
 });
-chrome.tabs.onRemoved.addListener(tabId => { void chrome.storage.session.remove(`tab:${tabId}`); });
+chrome.tabs.onRemoved.addListener(tabId => { selections.delete(tabId); void chrome.storage.session.remove(`tab:${tabId}`); });
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === 'loading') void chrome.storage.session.remove(`tab:${tabId}`);
 });
-chrome.runtime.onInstalled.addListener(() => {
-  void initialize().catch(error => console.warn('Lingua Lens initialization:', errorMessage(error)));
+chrome.runtime.onInstalled.addListener(details => {
+  void (async () => {
+    await initialize();
+    await chrome.contextMenus.removeAll();
+    chrome.contextMenus.create({ id: 'translate-selection', title: 'Translate selection with Lingua Lens', contexts: ['selection'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
+    if (details.reason === 'install') await openSetup();
+  })().catch(error => console.warn('Lingua Lens initialization:', errorMessage(error)));
+});
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === 'translate-selection' && tab?.id !== undefined) void initialize().then(() => translateSelection(tab.id!, info.frameId)).catch(error => openSetup(tab.id, errorMessage(error)));
+});
+chrome.commands.onCommand.addListener((command, suppliedTab) => {
+  void (async () => {
+    await initialize();
+    const tab = suppliedTab ?? (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+    if (tab?.id === undefined || !isWebsite(tab.url ?? '')) return;
+    if (command === 'translate-selection') await translateSelection(tab.id);
+    else if (command === 'toggle-page') {
+      const state = await tabState(tab.id);
+      if (!state.ready) { await openSetup(tab.id); return; }
+      await handle({ target: 'background', type: 'toggle', tabId: tab.id, enabled: state.status?.error ? true : !(state.status?.enabled ?? state.enabled) }, { id: chrome.runtime.id, url: chrome.runtime.getURL('popup.html') });
+    }
+  })().catch(error => { void openSetup(suppliedTab?.id, errorMessage(error)); });
 });
 chrome.runtime.onStartup.addListener(() => { void initialize().catch(error => console.warn('Lingua Lens startup:', errorMessage(error))); });
 chrome.permissions.onRemoved.addListener(() => {

@@ -9,12 +9,13 @@ async function until(check: () => boolean): Promise<void> {
   for (let i = 0; i < 300; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.ok(check(), 'UI did not reach the expected state');
 }
-async function ui(t: TestContext, name: 'popup' | 'setup', website = true, options: { context?: SourceContext; detectedSource?: string; detectorReady?: boolean; pageStatus?: PageStatus; permissionGranted?: boolean; autoSite?: boolean } = {}) {
+async function ui(t: TestContext, name: 'popup' | 'setup', website = true, options: { context?: SourceContext; detectedSource?: string; detectorReady?: boolean; pageStatus?: PageStatus; permissionGranted?: boolean; autoSite?: boolean; detectionUnavailable?: boolean; sitePair?: Settings['pair']; never?: boolean; pendingDownload?: boolean } = {}) {
   const window = new Window({ url: 'chrome-extension://lens/' + name + '.html' + (options.context ? '?tabId=1' : ''), settings: { enableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true } });
   const document = window.document as unknown as Document;
   const html = (await readFile('public/' + name + '.html', 'utf8')).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gu, '');
   document.write(html);
   let config: Settings = { pair: { ...DEFAULT_PAIR }, detectorReady: options.detectorReady ?? false, preparedPairs: ['pl:en'], ready: options.detectorReady ?? false, autoSites: options.autoSite ? ['www.example.com'] : [] };
+  config.sitePreferences = { 'www.example.com': { pair: options.sitePair, never: options.never } };
   const messages: BackgroundRequest[] = [];
   const prepared: string[] = [];
   const permissionRequests: string[][] = [];
@@ -25,12 +26,23 @@ async function ui(t: TestContext, name: 'popup' | 'setup', website = true, optio
       openOptionsPage: async () => {},
       sendMessage: async (message: BackgroundRequest) => {
         messages.push(message);
-        if (message.type === 'languages') config = { ...config, pair: message.pair, ready: message.pair.sourceLanguage === 'auto' ? config.detectorReady : config.preparedPairs.includes(pairKey(message.pair)) };
+        if (message.type === 'languages') {
+          if (message.tabId !== undefined) config.sitePreferences = { ...config.sitePreferences, 'www.example.com': { ...config.sitePreferences?.['www.example.com'], pair: message.pair } };
+          else config = { ...config, pair: message.pair, ready: message.pair.sourceLanguage === 'auto' ? config.detectorReady : config.preparedPairs.includes(pairKey(message.pair)) };
+        }
+        if (message.type === 'site-preference') {
+          const preference = config.sitePreferences!['www.example.com'];
+          if (message.resetPair) delete preference.pair;
+          if (message.never !== undefined) preference.never = message.never;
+          if (message.never) config.autoSites = [];
+        }
+        if (message.type === 'understood-languages') config.understoodLanguages = message.languages;
         if (message.type === 'auto') config = { ...config, autoSites: message.enabled ? ['www.example.com'] : [] };
         if (message.type === 'ready') { config = { ...config, detectorReady: config.detectorReady || message.pair.sourceLanguage === 'auto', ready: true, preparedPairs: [...config.preparedPairs, message.pair.sourceLanguage === 'auto' ? (message.detectedSource ?? '') + ':' + message.pair.targetLanguage : pairKey(message.pair)] }; }
         if (message.type === 'source-context') return { ok: true, data: options.context };
-        const state: TabState = { ...config, site: website ? 'www.example.com' : '', status: options.pageStatus ?? null, enabled: options.pageStatus?.enabled ?? false };
-        return { ok: true, data: message.type === 'state' && message.tabId !== undefined ? state : config };
+        const effectivePair = config.sitePreferences?.['www.example.com']?.pair ?? config.pair;
+        const state: TabState = { ...config, defaultPair: config.pair, pair: effectivePair, ready: effectivePair.sourceLanguage === 'auto' ? config.detectorReady : config.preparedPairs.includes(pairKey(effectivePair)), sitePreference: config.sitePreferences?.['www.example.com'], site: website ? 'www.example.com' : '', status: options.pageStatus ?? null, enabled: options.pageStatus?.enabled ?? false };
+        return { ok: true, data: 'tabId' in message && message.tabId !== undefined ? state : config };
       },
     },
     storage: { onChanged: { addListener() {} } },
@@ -45,9 +57,12 @@ async function ui(t: TestContext, name: 'popup' | 'setup', website = true, optio
       return options.permissionGranted ?? true;
     } },
   };
-  Object.assign(window, { chrome: mock, LanguageDetector: { availability: async () => 'available', create: async () => ({ detect: async () => [{ detectedLanguage: options.detectedSource ?? 'fr', confidence: 0.99 }], destroy() {} }) }, Translator: {
-    availability: async (pair: Settings['pair']) => pair.sourceLanguage === 'fr' && pair.targetLanguage === 'ja' ? 'unavailable' : 'available',
-    create: async (pair: Settings['pair']) => { prepared.push(pairKey(pair)); return { translate: async (text: string) => pairKey(pair) + ':' + text, destroy() {} }; },
+  Object.assign(window, { chrome: mock, LanguageDetector: { availability: async () => options.detectionUnavailable ? 'unavailable' : 'available', create: async () => ({ detect: async () => [{ detectedLanguage: options.detectedSource ?? 'fr', confidence: 0.99 }], destroy() {} }) }, Translator: {
+    availability: async (pair: Settings['pair']) => pair.sourceLanguage === 'fr' && pair.targetLanguage === 'ja' ? 'unavailable' : options.pendingDownload ? 'downloadable' : 'available',
+    create: async (pair: Settings['pair'] & { signal?: AbortSignal }) => {
+      if (options.pendingDownload) return new Promise((_resolve, reject) => { pair.signal?.addEventListener('abort', () => reject(new window.DOMException('Setup aborted', 'AbortError')), { once: true }); });
+      prepared.push(pairKey(pair)); return { translate: async (text: string) => pairKey(pair) + ':' + text, destroy() {} };
+    },
   } });
   const bundle = await build({ entryPoints: ['src/' + name + '.ts'], bundle: true, write: false, format: 'iife', target: 'chrome138' });
   window.eval(bundle.outputFiles[0].text);
@@ -161,4 +176,72 @@ test('setup creates the selected pair, shows a localized sample, and blocks unsu
   await until(() => !document.getElementById('setup-error')!.hidden);
   assert.match(document.getElementById('setup-error')!.textContent!, /cannot provide French → Japanese/);
   assert.equal(button('prepare').disabled, true);
+});
+
+test('first-run setup offers a real sample after preparing detection without a website', async t => {
+  const { document, button, prepared } = await ui(t, 'setup');
+  await until(() => !button('prepare').disabled);
+  button('prepare').click();
+  await until(() => button('prepare').textContent === 'Enable & test translation' && !button('prepare').disabled);
+  assert.match(document.getElementById('detected-language')!.textContent!, /Practice sample: Spanish/);
+  button('prepare').click();
+  await until(() => !document.getElementById('sample')!.hidden);
+  assert.deepEqual(prepared, ['es:en']);
+  assert.equal(document.getElementById('step-test')!.classList.contains('complete'), true);
+});
+
+test('unavailable detector gives a manual-source recovery path and compatibility retry', async t => {
+  const { document, button, select } = await ui(t, 'setup', true, { detectionUnavailable: true });
+  await until(() => !document.getElementById('setup-error')!.hidden);
+  assert.match(document.getElementById('setup-error')!.textContent!, /choose a source manually/);
+  assert.equal(button('check-again').disabled, false);
+  select('source-language', 'pl'); button('apply-languages').click();
+  await until(() => button('prepare').textContent === 'Enable & test translation' && !button('prepare').disabled);
+  assert.equal(document.getElementById('setup-error')!.hidden, true);
+});
+
+test('popup saves website languages without overwriting defaults and can reset the override', async t => {
+  const { document, button, select, messages } = await ui(t, 'popup', true, { detectorReady: true });
+  select('language-scope', 'site'); select('target-language', 'de'); button('apply-languages').click();
+  await until(() => !(document.getElementById('language-scope') as HTMLSelectElement).disabled && !document.getElementById('reset-site-languages')!.hidden);
+  const saved = messages.find(message => message.type === 'languages');
+  assert.equal(saved && 'tabId' in saved ? saved.tabId : undefined, 1);
+  select('language-scope', 'global');
+  assert.equal((document.getElementById('target-language') as HTMLSelectElement).value, 'en');
+  select('language-scope', 'site');
+  assert.equal((document.getElementById('target-language') as HTMLSelectElement).value, 'de');
+  button('reset-site-languages').click();
+  await until(() => !!document.getElementById('reset-site-languages')!.hidden);
+  assert.equal((document.getElementById('target-language') as HTMLSelectElement).value, 'en');
+});
+
+test('never translate turns off automatic translation and disables page actions without requesting access', async t => {
+  const { document, messages, permissionRequests, button } = await ui(t, 'popup', true, { detectorReady: true, autoSite: true });
+  (document.getElementById('never') as HTMLInputElement).click();
+  await until(() => document.getElementById('badge')!.textContent === 'Excluded' && !(document.getElementById('never') as HTMLInputElement).disabled);
+  assert.equal(button('toggle').disabled, true); assert.equal(button('translate-selection').disabled, true);
+  assert.equal((document.getElementById('auto') as HTMLInputElement).checked, false);
+  assert.deepEqual(permissionRequests, []);
+  assert.ok(messages.some(message => message.type === 'site-preference' && message.never));
+});
+
+test('understood language preferences are saved explicitly and survive setup refresh', async t => {
+  const { document, select, button, messages } = await ui(t, 'setup');
+  select('understood-languages', 'fr'); button('save-understood').click();
+  await until(() => document.getElementById('understood-status')!.textContent!.startsWith('Saved.'));
+  const saved = messages.find(message => message.type === 'understood-languages');
+  assert.deepEqual(saved && 'languages' in saved ? [...saved.languages] : null, ['fr']);
+});
+
+test('a stalled model download can be cancelled without saving readiness and setup remains retryable', async t => {
+  const { document, button, select, messages } = await ui(t, 'setup', true, { pendingDownload: true });
+  select('source-language', 'es'); select('target-language', 'fr'); button('apply-languages').click();
+  await until(() => button('prepare').textContent === 'Download & enable translation' && !button('prepare').disabled);
+  button('prepare').click();
+  await until(() => !button('cancel-setup').hidden);
+  button('cancel-setup').click();
+  await until(() => !button('prepare').disabled && document.getElementById('setup-status')!.textContent!.includes('cancelled'));
+  assert.equal(button('cancel-setup').hidden, true);
+  assert.equal(messages.some(message => message.type === 'ready'), false);
+  assert.equal((document.getElementById('source-language') as HTMLSelectElement).disabled, false);
 });

@@ -11,7 +11,7 @@ export interface LocalLanguageDetector {
 }
 export interface DetectorFactory {
   availability(): Promise<Availability>;
-  create(options?: { monitor?: (monitor: DownloadMonitor) => void }): Promise<LocalLanguageDetector>;
+  create(options?: { monitor?: (monitor: DownloadMonitor) => void; signal?: AbortSignal }): Promise<LocalLanguageDetector>;
 }
 export function detectorAPI(): DetectorFactory {
   const api = (globalThis as typeof globalThis & { LanguageDetector?: DetectorFactory }).LanguageDetector;
@@ -20,10 +20,10 @@ export function detectorAPI(): DetectorFactory {
 }
 export interface TranslatorFactory {
   availability(options: LanguagePair): Promise<Availability>;
-  create(options: LanguagePair & { monitor?: (monitor: DownloadMonitor) => void }): Promise<LocalTranslator>;
+  create(options: LanguagePair & { monitor?: (monitor: DownloadMonitor) => void; signal?: AbortSignal }): Promise<LocalTranslator>;
 }
 export function translatorAPI(): TranslatorFactory {
   const api = (globalThis as typeof globalThis & { Translator?: TranslatorFactory }).Translator;
-  if (!api) throw new Error('Local translation is unavailable. Use Google Chrome 138 or newer on Windows and reopen setup.');
+  if (!api) throw new Error('Local translation is unavailable. Use an up-to-date desktop Google Chrome on Windows or macOS and reopen setup.');
   return api;
 }

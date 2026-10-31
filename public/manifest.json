@@ -1,12 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Lingua Lens",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Automatically detect website languages and translate pages and dialogs into your chosen language, locally in Chrome.",
   "minimum_chrome_version": "138",
-  "permissions": ["activeTab", "scripting", "storage", "offscreen"],
+  "permissions": ["activeTab", "scripting", "storage", "offscreen", "contextMenus"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "background": {"service_worker": "background.js", "type": "module"},
   "action": {"default_popup": "popup.html", "default_title": "Lingua Lens"},
-  "options_page": "setup.html"
+  "options_page": "setup.html",
+  "commands": {
+    "translate-selection": { "suggested_key": { "default": "Alt+Shift+Y" }, "description": "Translate selected text" },
+    "toggle-page": { "suggested_key": { "default": "Alt+Shift+L" }, "description": "Translate or restore this page" }
+  }
 }

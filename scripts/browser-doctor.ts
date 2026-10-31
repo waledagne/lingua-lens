@@ -1,13 +1,5 @@
-import path from 'node:path';
-import { chromium } from '@playwright/test';
-import { prepareBrowser } from './browser-runtime.ts';
-
-const executable = await prepareBrowser();
-const extension = path.resolve('dist');
-const context = await chromium.launchPersistentContext('', {
-  channel: 'chromium', executablePath: executable, headless: true,
-  args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension],
-});
+import { nativeBrowser } from './native-browser.ts';
+const context = await nativeBrowser();
 try {
   const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
   const extensionId = new URL(worker.url()).host;

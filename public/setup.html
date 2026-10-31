@@ -7,8 +7,11 @@
     <div class="eyebrow">YOUR LANGUAGES · LOCAL TRANSLATION</div>
     <h1>Make yourself<br>at home on the web.</h1>
     <p class="intro">Read websites in your chosen language, including the dialog that just opened and the menu you haven't clicked yet.</p>
+    <ol class="setup-steps" aria-label="Setup progress"><li id="step-languages" aria-current="step">1 · Choose your target</li><li id="step-models">2 · Prepare on-device models</li><li id="step-test">3 · Try a translation</li></ol>
+    <p id="setup-scope" class="scope-note"></p>
+    <p id="launch-issue" class="error" hidden></p>
     <section class="setup-card">
-      <div class="step-label">01 <span>Choose your languages</span></div>
+      <div class="step-label">01 <span>Choose your target language</span></div>
       <div class="language-selectors">
         <label>From<select id="source-language" aria-label="Source language" disabled></select></label>
         <button id="swap-languages" class="swap-button" aria-label="Swap languages" disabled>⇄</button>
@@ -18,13 +21,25 @@
       <p id="language-hint" class="language-hint" role="status">Languages apply to all translated tabs.</p>
       <p>Leave the source on <strong>Auto-detect</strong> and choose your target language. Chrome prepares a local language detector and any translation packs the detected page needs. No account or API key required.</p>
       <button id="prepare" class="primary" disabled>Prepare selected languages</button>
+      <button id="cancel-setup" class="secondary" hidden>Cancel setup</button>
       <progress id="progress" max="1" value="0" hidden aria-label="Language pack download progress"></progress>
       <p id="setup-status" role="status" aria-live="polite">Checking Chrome compatibility…</p>
       <p id="detected-language" role="status" hidden></p>
       <p id="setup-error" class="error" role="alert" hidden></p>
+      <button id="check-again" class="text-button">Check compatibility again</button>
       <div id="sample" class="sample" hidden><span id="sample-source" dir="auto"></span><span aria-hidden="true">↓</span><strong id="sample-result" dir="auto"></strong></div>
+      <button id="finish-setup" class="primary" hidden>Translate &amp; return to website</button>
+    </section>
+    <section class="preferences-card" aria-labelledby="understood-title">
+      <h2 id="understood-title">Languages you already understand</h2>
+      <p>Keep these languages in their original form during automatic page translation. Selected-text translation and a manual source choice still translate when you ask.</p>
+      <label for="understood-languages">Keep original (optional)</label>
+      <select id="understood-languages" multiple size="5" aria-describedby="understood-help"></select>
+      <p id="understood-help">Use Ctrl-click on Windows or Command-click on Mac to select several languages.</p>
+      <button id="save-understood" class="secondary">Save understood languages</button><p id="understood-status" role="status"></p>
     </section>
     <section class="next-step"><div class="step-label">02 <span>Translate a website</span></div><p>Open any ordinary website, click Lingua Lens in the toolbar, and choose <strong>Translate this page</strong>. Turn on <strong>Always translate this site</strong> if you want translation on future visits. Use <strong>Pause &amp; restore original</strong> to return to the source text.</p><p>Chrome settings, the Web Store, and other protected browser pages cannot be translated.</p></section>
-    <footer>Chrome 138+ on desktop · On-device translation · Version 0.3.1</footer>
+    <section class="preferences-card"><h2>Quick actions</h2><p>Highlight text and right-click → <strong>Translate selection with Lingua Lens</strong>. Or use the toolbar's selected-text button.</p><ul id="shortcut-list"><li>Translate selection: Alt + Shift + Y</li><li>Translate / restore page: Alt + Shift + L</li></ul><p>On Mac, Alt is Option. Shortcuts may be unassigned if another app uses them.</p><button id="configure-shortcuts" class="secondary">Customize keyboard shortcuts</button></section>
+    <footer>Chrome 138+ on desktop · Windows &amp; macOS · On-device translation · Version 0.4.0</footer>
   </main><script src="setup.js"></script>
 </body></html>

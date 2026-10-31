@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DEFAULT_PAIR, LANGUAGES, isWebsite, originPattern, pairKey, parsePair, siteKey, siteOrigins } from '../src/shared.ts';
-import { readSettings, storedSettings } from '../src/settings.ts';
+import { forSite, readSettings, storedSettings } from '../src/settings.ts';
 import { chunks } from '../src/segment.ts';
 
 test('validates language pairs and rejects identity/unknown pairs', () => {
@@ -47,4 +47,18 @@ test('segments several source languages without losing Unicode or whitespace', (
     const result = chunks(text, 100, locale);
     assert.equal(result.join(''), text); assert.ok(result.every(part => part.length <= 101));
   }
+});
+
+test('milestone upgrade preserves manual defaults and validates per-site preferences', () => {
+  const pair = { sourceLanguage: 'fr', targetLanguage: 'de' };
+  const config = readSettings({ schemaVersion: 3, pair, preparedPairs: ['es:en'],
+    autoSites: ['never.example', 'keep.example'], understoodLanguages: ['de', 'xx', 'de'],
+    sitePreferences: { 'never.example': { never: true }, 'keep.example': { pair: { sourceLanguage: 'es', targetLanguage: 'en' } }, 'bad.example/path': { never: true }, 'invalid.example': { pair: { sourceLanguage: 'xx' } } } });
+  assert.deepEqual(config.pair, pair);
+  assert.deepEqual(config.autoSites, ['keep.example']);
+  assert.deepEqual(config.understoodLanguages, ['de']);
+  assert.deepEqual(Object.keys(config.sitePreferences!), ['never.example', 'keep.example']);
+  assert.equal(forSite(config, 'keep.example').ready, true);
+  assert.deepEqual(forSite(config, 'unrelated.example').pair, pair);
+  assert.deepEqual(readSettings(storedSettings(config)), config);
 });
