@@ -4,13 +4,14 @@ import { Window } from 'happy-dom';
 import { DomTranslator } from '../src/dom-translator.ts';
 import { chunks } from '../src/segment.ts';
 import { siteKey, withPadding } from '../src/shared.ts';
+import { PassageEngine } from '../src/passage-engine.ts';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check: () => boolean): Promise<void> {
   for (let i = 0; i < 200; i++) { if (check()) return; await sleep(5); }
   assert.ok(check(), 'Condition did not become true');
 }
-function fixture(t: TestContext, html: string, translate = async (texts: string[]) => texts.map(text => `EN:${text}`)) {
+function fixture(t: TestContext, html: string, translate: ConstructorParameters<typeof DomTranslator>[1] = async texts => texts.map(text => `EN:${text}`)) {
   const window = new Window({ url: 'https://allegro.pl/' });
   const document = window.document as unknown as Document;
   document.body.innerHTML = html;
@@ -253,4 +254,89 @@ test('reveal original uses saved text for selected translated items and ignores 
   document.querySelector('strong')!.firstChild!.textContent = 'Website changed this';
   assert.equal(controller.originalForSelection(), null);
   controller.stop(); assert.equal(controller.originalForSelection(), null);
+});
+
+test('automatic passages preserve context and language identity for identical labels and inline originals', async t => {
+  const contexts: string[] = [];
+  const engine = new PassageEngine(async context => { contexts.push(context.sample); return context.pageLanguage; }, async (texts, pair) => texts.map(text => pair.sourceLanguage + ':' + text));
+  const { document, controller } = fixture(t, '<p lang="fr">Menu</p><p lang="pl">Menu</p><p lang="en">Menu</p><p lang="fr" id="inline">Bonjour <strong>monde</strong>.</p>', (texts, contexts) => engine.run(texts, contexts, 'en', []));
+  controller.setAutomaticDetection(true); controller.start();
+  await until(() => document.querySelector('p')!.textContent === 'fr:Menu');
+  assert.equal(document.querySelectorAll('p')[1].textContent, 'pl:Menu'); assert.equal(document.querySelectorAll('p')[2].textContent, 'Menu');
+  await until(() => document.querySelector('strong')!.textContent === 'fr:monde');
+  const extra = document.createTextNode(' Salut'); document.getElementById('inline')!.append(extra);
+  await until(() => extra.data === ' fr:Salut');
+  assert.ok(contexts.includes('Bonjour monde. Salut'));
+  assert.ok(contexts.every(sample => !sample.includes('fr:')));
+  assert.deepEqual(new Set(controller.status().detectedSources), new Set(['fr', 'pl', 'en']));
+});
+
+test('passage failures are visible without retry loops; new content continues and explicit retry recovers', async t => {
+  let ready = false, frenchCalls = 0;
+  const engine = new PassageEngine(async context => context.pageLanguage, async (texts, pair) => {
+    if (pair.sourceLanguage === 'fr') { frenchCalls++; if (!ready) throw new Error('Prepare French → English'); }
+    return texts.map(text => pair.sourceLanguage + ':' + text);
+  });
+  const { document, controller } = fixture(t, '<p lang="fr">Bonjour</p><p lang="pl">Witaj</p>', (texts, contexts) => engine.run(texts, contexts, 'en', []));
+  controller.setAutomaticDetection(true); controller.start();
+  await until(() => controller.status().untranslated === 1);
+  assert.equal(controller.status().error, null); assert.equal(document.querySelector('p')!.textContent, 'Bonjour');
+  const added = document.createElement('p'); added.lang = 'pl'; added.textContent = 'Nowe'; document.body.append(added);
+  await until(() => added.textContent === 'pl:Nowe');
+  assert.equal(frenchCalls, 1);
+  ready = true; controller.start();
+  await until(() => document.querySelector('p')!.textContent === 'fr:Bonjour');
+  assert.equal(controller.status().untranslated, 0);
+});
+
+test('language metadata changes restore and re-detect existing page and shadow text', async t => {
+  const engine = new PassageEngine(async context => context.pageLanguage, async (texts, pair) => texts.map(text => pair.sourceLanguage + ':' + text));
+  const { document, controller } = fixture(t, '<p>Menu</p><div id="host"></div>', (texts, contexts) => engine.run(texts, contexts, 'en', []));
+  document.documentElement.lang = 'en';
+  const root = document.getElementById('host')!.attachShadow({ mode: 'open' }); root.innerHTML = '<p>Menu</p>';
+  controller.setAutomaticDetection(true); controller.start();
+  await until(() => controller.status().detectedSources?.includes('en') ?? false);
+  document.documentElement.lang = 'es';
+  await until(() => document.querySelector('p')!.textContent === 'es:Menu' && root.querySelector('p')!.textContent === 'es:Menu');
+  document.querySelector('p')!.lang = 'fr';
+  await until(() => document.querySelector('p')!.textContent === 'fr:Menu');
+  controller.stop(); assert.equal(document.querySelector('p')!.textContent, 'Menu'); assert.equal(root.querySelector('p')!.textContent, 'Menu');
+});
+
+test('bilingual blocks split at language boundaries and never include protected drafts in detection samples', async t => {
+  const samples: string[] = [];
+  const engine = new PassageEngine(async context => { samples.push(context.sample); return context.pageLanguage; }, async (texts, pair) => texts.map(text => pair.sourceLanguage + ':' + text));
+  const { document, controller } = fixture(t, '<p lang="pl">Witaj <span lang="fr">Bonjour</span></p><div contenteditable="true"><p lang="fr">Private draft</p></div><p lang="en">Already English</p>', (texts, contexts) => engine.run(texts, contexts, 'en', []));
+  controller.setAutomaticDetection(true); controller.setReadingMode('bilingual', 'en'); controller.start();
+  await until(() => document.querySelector('span[lang]')!.textContent === 'fr:Bonjour');
+  assert.equal(document.querySelector('p')!.firstChild!.textContent, 'pl:Witaj ');
+  assert.equal(document.querySelector('[data-lingua-lens-translation]'), null);
+  assert.equal(document.querySelector('[contenteditable]')!.textContent, 'Private draft');
+  assert.equal(samples.some(sample => sample.includes('Private') || (sample.includes('Witaj') && sample.includes('Bonjour'))), false);
+});
+
+test('a failed passage converted into an editor no longer reports an issue or samples subsequent drafts', async t => {
+  let detections = 0;
+  const engine = new PassageEngine(async context => { detections++; return context.pageLanguage; }, async () => { throw new Error('Prepare French'); });
+  const { document, controller } = fixture(t, '<p lang="fr">Bonjour</p>', (texts, contexts) => engine.run(texts, contexts, 'en', []));
+  controller.setAutomaticDetection(true); controller.start();
+  await until(() => controller.status().untranslated === 1);
+  const paragraph = document.querySelector('p')!; paragraph.contentEditable = 'true'; paragraph.firstChild!.textContent = 'Private draft';
+  await until(() => controller.status().untranslated === 0);
+  await sleep(30); assert.equal(detections, 1);
+  controller.stop(); assert.equal(paragraph.textContent, 'Private draft');
+});
+
+test('initially hidden passages are re-detected when revealed without requiring a manual retry', async t => {
+  let detections = 0;
+  const engine = new PassageEngine(async context => {
+    detections++; if (!context.sample) throw new Error('Not enough visible context'); return 'fr';
+  }, async texts => texts.map(text => 'English:' + text));
+  const { document, controller } = fixture(t, '<p hidden>Bonjour et bienvenue dans notre magasin.</p>', (texts, contexts) => engine.run(texts, contexts, 'en', []));
+  controller.setAutomaticDetection(true); controller.start();
+  await until(() => detections === 1 && controller.status().pending === 0);
+  assert.equal(controller.status().untranslated, 0, 'Hidden content should not advertise an issue on the visible page');
+  const paragraph = document.querySelector('p')!; paragraph.hidden = false;
+  await until(() => paragraph.textContent === 'English:Bonjour et bienvenue dans notre magasin.');
+  assert.equal(controller.status().untranslated, 0);
 });

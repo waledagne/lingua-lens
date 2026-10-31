@@ -2,6 +2,7 @@ import { errorMessage, MAX_BATCH, MAX_TEXT, parsePair } from './shared';
 import { detectorAPI, translatorAPI } from './translator-api';
 import { TranslationEngine } from './translation-engine';
 import { SourceDetector, validateContext } from './source-detector';
+import { PassageEngine, validatePassages } from './passage-engine';
 
 const segmenter = new Worker('segment-worker.js');
 let sequence = 0;
@@ -24,8 +25,18 @@ function split(texts: string[], sourceLanguage: string): Promise<string[][]> {
 }
 const engine = new TranslationEngine(translatorAPI, split);
 const detector = new SourceDetector(detectorAPI);
+const passages = new PassageEngine(context => detector.detect(context), (texts, pair) => engine.translate(texts, pair));
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || sender.tab || message?.target !== 'engine') return;
+  if (message.type === 'translate-passages') {
+    try {
+      const { texts, contexts } = validatePassages(message.texts, message.contexts);
+      const pair = parsePair(message.pair);
+      if (pair.sourceLanguage !== 'auto' || !Array.isArray(message.understoodLanguages) || !message.understoodLanguages.every((code: unknown) => typeof code === 'string')) throw new Error('Invalid passage settings.');
+      void passages.run(texts, contexts, pair.targetLanguage, message.understoodLanguages).then(data => respond({ ok: true, data }), error => respond({ ok: false, error: errorMessage(error) }));
+    } catch (error) { respond({ ok: false, error: errorMessage(error) }); return; }
+    return true;
+  }
   if (message.type === 'detect') {
     try {
       void detector.detect(validateContext(message.context)).then(data => respond({ ok: true, data }), error => respond({ ok: false, error: errorMessage(error) }));

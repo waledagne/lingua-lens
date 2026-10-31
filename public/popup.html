@@ -2,7 +2,7 @@
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lingua Lens</title><link rel="stylesheet" href="styles.css"></head>
 <body class="popup">
-  <header class="brand"><span class="mark" aria-hidden="true">文<span>→A</span></span><div><strong>Lingua Lens</strong><small>A little less lost in translation.</small></div><span class="version">0.5.0</span></header>
+  <header class="brand"><span class="mark" aria-hidden="true">文<span>→A</span></span><div><strong>Lingua Lens</strong><small>A little less lost in translation.</small></div><span class="version">0.6.0</span></header>
   <main>
     <div class="eyebrow">YOUR BROWSER, YOUR LANGUAGE</div>
     <section class="site-card" aria-label="Current website">
@@ -14,6 +14,7 @@
     <button id="toggle" class="primary" disabled>Translate this page</button>
     <div class="selection-actions"><button id="translate-selection" class="secondary" disabled>Translate selected text</button><button id="reveal-original" class="secondary" disabled>Reveal original selection</button></div>
     <button id="setup" class="secondary" hidden>Set up local translation</button>
+    <button id="restore-partial" class="secondary" hidden>Pause &amp; restore original</button>
     <label class="auto-row"><span><strong>Always translate this site</strong><small>Include new pages, menus, and dialogs.</small></span><input id="auto" type="checkbox" role="switch" disabled></label>
     <label class="never-row"><input id="never" type="checkbox" disabled> Never translate this site</label>
     <details id="preferences" class="popup-preferences"><summary>Languages &amp; reading</summary><div class="preferences-body">

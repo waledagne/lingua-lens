@@ -14,6 +14,16 @@ Built with **TypeScript** for desktop **Google Chrome**, using Chrome's local tr
 
 Detection and translation use Chrome's local models. Additional translation providers remain future work.
 
+## Version 0.6: mixed-language pages
+
+**Auto-detect** now resolves the source separately for each passage instead of fixing one source for an entire document. A page can contain Polish, French, and Spanish passages, each translated into your chosen target. Passages already in the target language, or in a language you understand, keep their originals. A manual source choice still explicitly applies one source to the page.
+
+Detection uses up to 1,600 characters of original context from the passage's reading block or local language region. Inline fragments use nearby original text, including saved originals of text already translated by the extension. Short or uncertain passages use the nearest declared `lang`, inherited across open shadow-root hosts. Confident text detection can override incorrect markup. Bilingual grouping splits at declared language boundaries so separate languages are not merged into one translation request.
+
+New and changed passages are detected again. Changes to `lang`, `hidden`, or `aria-hidden` restore affected originals and refresh their contexts, including in accessible shadow roots. This handles language changes during navigation within a website without reloading the extension. Explicitly hidden content does not advertise unresolved issues until it becomes visible.
+
+Missing packs and uncertain passages produce **Partial** status. Those passages retain their original text while other language groups continue translating. The popup lists the affected source and offers its pack setup, **Retry translation**, and **Pause & restore original**. Preparing the requested pack retains automatic source selection and the current target. Unknown source languages still need a manual source or better page context; the extension does not send text to a cloud fallback.
+
 ## Version 0.5: bilingual reading and original passages
 
 Expand **Languages & reading** in the toolbar and choose **Bilingual paragraphs** from **Reading mode**. Complete reading blocks are translated across inline markup, so `A <strong>good</strong> product` is sent as one passage. The original block, formatting, and links stay in place; its plain-text translation appears underneath. Headings, paragraphs, simple list items, quotes, captions, and definition items can be grouped. Newly inserted blocks and changed or removed inline text update through the same observer.
@@ -37,7 +47,7 @@ The added `contextMenus` permission supplies the selection action. It does not a
 
 ## Using Lingua Lens
 
-The source defaults to **Auto-detect**. Choose your target language in the toolbar popup or setup page, then click **Apply languages**. In the popup, **Save preferences for** selects the default for all websites or an override for the current hostname. Each page/frame detects its own source. A manual source choice is available for ambiguous or incorrectly identified pages.
+The source defaults to **Auto-detect**. Choose your target language in the toolbar popup or setup page, then click **Apply languages**. In the popup, **Save preferences for** selects the default for all websites or an override for the current hostname. Each passage can use a different detected source. A manual source choice is available for ambiguous or incorrectly identified pages.
 
 Use the toolbar on any ordinary HTTP(S) website that Chrome permits extensions to access. No website is enabled automatically by default, and there are no website-specific translation rules or required host permissions. **Always translate this site** requests access to the chosen hostname and enables automatic translation there.
 
@@ -49,7 +59,7 @@ The code currently includes:
 - Per-tab pause and restoration, per-site automatic translation, and local language-pack setup.
 - Queued translation, duplicate-text caching, and checks that prevent late responses from overwriting newer page content.
 - Saved language choices, preparation status for each language pair, translator sessions and caches separated by pair, and sentence segmentation using the selected source language.
-- Local page-language detection from a text sample, fallback to the page's declared language, and passthrough when the page already uses the target language.
+- Local passage-language detection, fallback to the nearest declared language, and passthrough for target and understood languages.
 
 Changing effective language preferences restores original page text before translating again. In automatic mode the local detector is prepared once; a newly detected source may need its own one-time translation-pack download. Responses from old language selections, including pending detection results, are ignored after switching.
 
@@ -66,7 +76,7 @@ The built extension is already in `dist/`.
 7. Use **Always translate this site** to enable translation on future visits. Chrome will request access to that hostname when needed.
 8. Use **Pause & restore original** to restore source text. Pausing lasts until navigation; disable the site switch to stop future automatic translation.
 
-After updating an existing unpacked installation, reload the extension in `chrome://extensions` and refresh any pages that were already translated. Version 0.5 preserves existing language choices, prepared pairs, permitted automatic sites, exclusions, and understood languages. Reading mode defaults to **Translated only** until changed. Older installations from before version 0.3 migrate to automatic detection while retaining the target and previous pack preparation.
+After updating an existing unpacked installation, reload the extension in `chrome://extensions` and refresh any pages that were already translated. Version 0.6 preserves existing language choices, reading modes, prepared pairs, permitted automatic sites, exclusions, and understood languages. Mixed-language detection is part of **Auto-detect** and needs no additional website permissions. Older installations from before version 0.3 migrate to automatic detection while retaining the target and previous pack preparation.
 
 Chrome performs the first language-pack download. Availability depends on Chrome, its policies, your device, and the requested pair; setup reports failures instead of silently sending text to a server. No cloud fallback or API key is configured.
 
@@ -102,7 +112,7 @@ The latest corrected native availability check reported both Language Detector a
 
 The Windows runtime workaround follows the private-assembly requirement that manifests accompany their DLLs. [Microsoft assembly documentation](https://learn.microsoft.com/en-us/windows/win32/sbscs/assembly-manifests). The persistent, isolated Chromium launch follows [Playwright's extension-testing guidance](https://playwright.dev/docs/chrome-extensions).
 
-Validation covers TypeScript checking, the production build, 78 unit/integration tests, and 11 browser tests in Chrome for Testing 156.0.8078.4. Tests cover UI/content scripts, detection, migration, permissions, caching, stale responses, runtime preparation, per-site settings, exclusion across tabs, selection and frames, copy, assigned commands, and cancelled setup. Reading tests cover paragraph context across inline markup, line breaks, removed/replaced nodes, mode switches during pending requests, protected regions, shadow roots, restoration, and original reveal without a model request. The browser suite exercises real extension APIs with deterministic models; keyboard and context-menu event routing is also tested with mocks. Real native-model completion, accuracy, Mac compatibility, and live commercial website flows remain release verification tasks.
+Validation covers TypeScript checking, the production build, 93 unit/integration tests, and 13 browser tests in Chrome for Testing 156.0.8078.4. Tests cover UI/content scripts, detection, migration, permissions, caching, stale responses, runtime preparation, per-site settings, exclusion across tabs, selection and frames, copy, assigned commands, and cancelled setup. Reading and mixed-language tests cover inline context, language boundaries, source-specific duplicate labels, missing-pack isolation and recovery, understood-language passthrough, live language/visibility changes, protected drafts, shadow roots, restoration, and original reveal without a model request. The browser suite exercises real extension APIs with deterministic models; keyboard and context-menu event routing is also tested with mocks. Real native-model completion, accuracy, Mac compatibility, and live commercial website flows remain release verification tasks.
 
 ## Troubleshooting automatic translation
 
@@ -121,6 +131,8 @@ The fix requests separate `http://hostname/*` and `https://hostname/*` permissio
 | `src/engine.ts` | Offscreen messaging and the sentence-segmentation worker |
 | `src/translation-engine.ts` | Sequential queue, per-pair translation caches, and a bounded pool of Translator sessions |
 | `src/source-detector.ts` | Local detector lifecycle, confidence checks, regional-language normalization, and bounded detection cache |
+| `src/passage-engine.ts` | Validate passage batches, detect sources, group translation by language, and isolate failures |
+| `src/passage-context.ts` / `src/dom-language.ts` | Sample original local context, honor language boundaries, and inherit metadata across shadow hosts |
 | `src/source-context.ts` | Bounded page samples that exclude editable fields and explicitly hidden/excluded regions |
 | `src/segment-worker.ts` | Split long text into sentence-sized chunks in a worker |
 | `src/languages.ts` | Language options, pair validation, names, and sample text |
@@ -133,7 +145,7 @@ The fix requests separate `http://hostname/*` and `https://hostname/*` permissio
 
 The local Translator and Language Detector APIs require a document context, so they run in an offscreen document, not the extension service worker. The sentence-segmentation worker is the reason for the `offscreen` permission's `WORKERS` use. Initial model creation happens from clicks in the visible setup document on the extension's origin; the offscreen engine then reuses that origin's prepared models.
 
-The DOM translation controller provides common page handling across websites. Automatic mode samples the page before translating, detects its source once per document/frame, and reuses that result for new content. Each translation request carries a snapshot of the preferences and resolved source. The background rejects outdated selections and skips the translator when source equals target. The content controller restores source text and invalidates pending work when preferences change.
+The DOM controller provides common handling across websites. Automatic batches include up to 32 text items and matching local detection contexts, with at most 24,000 text characters and 1,600 context characters per item. Deduplication includes context and language hints so identical labels in different regions do not share the wrong source. The background validates the batch and forwards trusted language preferences to the offscreen engine. The engine detects each context, groups requests by source, skips target/understood languages, and returns per-passage issues. Settings changes and changed or replaced DOM entries reject stale output.
 
 Translation replaces text-node data and selected display attributes (`title`, `aria-label`, `placeholder`, `alt`), never `innerHTML`. This preserves element identities and click listeners. Form values, passwords, textareas, editable regions, code, and `translate="no"` regions are excluded. Options without explicit values are excluded because their labels can determine submitted values. New dialogs are prioritized over the initial backlog. Responses apply only when the node still contains the original source and translation is still enabled. Restoring originals preserves subsequent website changes.
 
@@ -142,7 +154,7 @@ Translation replaces text-node data and selected display attributes (`title`, `a
 - Manual translation uses Chrome's temporary `activeTab` grant when you invoke the toolbar extension. There is no required access to any website at installation.
 - Enabling **Always translate this site** requests optional access to that exact hostname for HTTP and HTTPS and registers its content script persistently. Subdomains are separate sites.
 - Disable the site switch to stop automatic translation and remove its registration. Chrome's site-access settings can revoke the granted permission; revoked sites are removed from automatic translation.
-- Page samples and translatable text pass only between extension components and Chrome's local models. Samples are limited to 6,000 characters and exclude input fields, editable areas, and explicitly hidden/excluded content. Setup links do not include page samples or selected passages. The extension includes no network translation requests, analytics, API keys, or remote scripts.
+- Page samples and translatable text pass only between extension components and Chrome's local models. Setup/selection detection samples are limited to 6,000 characters; automatic passage contexts are limited to 1,600 characters each. Context sampling excludes editing fields, protected regions, explicitly hidden content, and extension UI. Setup links can include a source-language code for pack preparation, but never page samples or selected passages. The extension includes no network translation requests, analytics, API keys, or remote scripts.
 - Preferences are saved in extension-local storage. Tab overrides use session storage; translated text is held only in a bounded in-memory cache.
 - Selected text is read only when you invoke a selection action. Its original and translation appear in the in-page panel and may enter the in-memory translation cache. Copy writes the translation to the clipboard only when clicked. Selected text is never placed in setup URLs or saved preferences.
 - Site access means all relevant text can be read, including hidden page UI. Do not enable automatic translation on sites where you do not want this behavior.
@@ -150,7 +162,7 @@ Translation replaces text-node data and selected display attributes (`title`, `a
 ## Current limits
 
 - The language menu reflects Chrome's documented language list. Availability is checked for the selected pair on the device; listed languages do not guarantee every pair is available in every Chrome installation.
-- Language defaults can be overridden per hostname. Detection chooses one main source per document/frame, rather than detecting each individual text node. Mixed-language pages or a single-page application that changes its main language may need a refresh or manual source override. Automatic selection translation detects the selected passage; short selections can fall back to the document's declared language.
+- Language defaults can be overridden per hostname. Automatic mode chooses a source from each local context, rather than identifying every individual word. Unmarked sentences that mix several languages can still resolve to one dominant language. Short labels can rely on declared metadata; incorrect metadata can therefore mislead detection when there is too little text. Automatic selection translation detects the selected passage; short selections can fall back to the document's declared language.
 - A supported page-language declaration is used when the sample is short or the model is uncertain. Without a reliable declaration or sufficiently confident sample, the extension asks for a manual source rather than silently guessing. Detection does not make every language supported by the translator.
 - This is a prototype; translation quality and interactive flows across real websites still need testing in Chrome.
 - Chrome UI, the Web Store, protected browser pages, and Chrome's PDF viewer are outside normal extension access.
@@ -158,12 +170,12 @@ Translation replaces text-node data and selected display attributes (`title`, `a
 - Cross-origin frames require permission for their own origin. Permission for the main website does not automatically cover third-party widgets or embedded applications.
 - Open shadow roots inserted with a host are detected immediately. Roots attached later to existing hosts are discovered on interaction or within 2.5 seconds.
 - Translated-only mode handles DOM text nodes independently; sentences split by inline markup can lose context. Bilingual mode groups eligible reading blocks across inline markup. Complex blocks fall back to text-node translation; individual nodes above 12,000 characters are skipped. Short brands and mixed-language text can produce imperfect results.
-- The popup counts the main frame's text items, not aggregated iframe totals. Pausing is a per-tab override until navigation; turn off the site switch to disable future automatic translation.
+- The popup's counts, detected-language list, and partial-translation notices cover the main frame. Child frames translate independently; a pack needed only by a child frame can require manual language setup. Pausing is a per-tab override until navigation; turn off the site switch to disable future automatic translation.
 - Websites that continuously rewrite their own UI can cause flicker or conflict with translated labels. Frameworks can depend on exact text-node content; test interactive flows before treating them as verified.
 
 ## Roadmap
 
-1. **Mixed-language detection:** improve sampling and detect independent language regions within a page.
+1. **Detection quality:** refine unmarked mixed-language sentences and ambiguous short labels across different page layouts.
 2. **Reading improvements:** refine block discovery on complex layouts and support more inline context while retaining working website controls.
 3. **Broader website validation:** test dialogs, navigation, forms, embedded frames, and dynamically updated content across different websites and web applications.
 4. **Translation quality:** group text split by inline markup and add optional user glossaries for names and recurring terms.

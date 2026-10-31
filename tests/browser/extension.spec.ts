@@ -9,17 +9,19 @@ test.describe.configure({ mode: 'serial' });
 // Only the isolated test copy receives a deterministic Translator. dist/ always uses Chrome's real API.
 const mock = `globalThis.LanguageDetector = {
   availability: async () => 'available',
-  create: async () => ({detect: async () => [{detectedLanguage:'pl',confidence:0.99}],destroy(){}})
+  create: async () => ({detect: async text => [{detectedLanguage:text.includes('Bonjour')?'fr':text.includes('Hola')?'es':text.includes('Welcome')?'en':'pl',confidence:0.99}],destroy(){}})
 };
 globalThis.Translator = {
-  availability: async pair => pair.sourceLanguage === 'fr' && pair.targetLanguage === 'ja' ? 'unavailable' : 'available',
-  create: async pair => ({
+  availability: async pair => (await chrome.runtime.sendMessage({target:'test-model',type:'get'})) === pair.sourceLanguage + ':' + pair.targetLanguage ? 'downloadable' : pair.sourceLanguage === 'fr' && pair.targetLanguage === 'ja' ? 'unavailable' : 'available',
+  create: async pair => {
+    if ((await chrome.runtime.sendMessage({target:'test-model',type:'get'})) === pair.sourceLanguage + ':' + pair.targetLanguage) await chrome.runtime.sendMessage({target:'test-model',type:'clear'});
+    return {
     translate: async text => {
       await new Promise(r => setTimeout(r, 8));
       const dictionary = {'Witaj.':'Hello.','Twój koszyk jest pusty.':'Your cart is empty.','Wybierz dostawę':'Choose delivery','Metoda dostawy':'Delivery method','Dostawa jutro':'Delivery tomorrow','Zamknij':'Close','Szukaj produktów':'Search products','Witaj w sklepie':'Welcome to the shop','Pomoc i kontakt':'Help and contact','Treść ramki':'Frame content','Liczba produktów: 1':'Number of products: 1'};
       return pair.sourceLanguage === 'pl' && pair.targetLanguage === 'en' ? dictionary[text] || 'English: ' + text : pair.sourceLanguage + ':' + pair.targetLanguage + ':' + text;
     }, destroy() {}
-  })
+  }}
 };\n`;
 let context: BrowserContext;
 let worker: Worker;
@@ -43,6 +45,14 @@ test.beforeAll(async () => {
     const source = await readFile(path.join(extension, file), 'utf8');
     await writeFile(path.join(extension, file), mock + source);
   }
+  // Offscreen documents expose runtime messaging, not chrome.storage.
+  const background = await readFile(path.join(extension, 'background.js'), 'utf8');
+  await writeFile(path.join(extension, 'background.js'), `chrome.runtime.onMessage.addListener((message,sender,respond)=>{
+    if(sender.id!==chrome.runtime.id||message.target!=='test-model')return;
+    if(message.type==='get')chrome.storage.local.get('testUnavailablePair').then(value=>respond(value.testUnavailablePair??null));
+    else chrome.storage.local.remove('testUnavailablePair').then(()=>respond(true));
+    return true;
+  });\n` + background);
   const fixture = await readFile('tests/fixture.html', 'utf8');
   server = createServer((request, response) => {
     response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -350,5 +360,85 @@ test('original reveal shows source text for page and frame selections without re
   await framePanel.getByRole('button', { name: 'Close translation' }).click();
   const shortcuts = await worker.evaluate(() => chrome.commands.getAll());
   expect(shortcuts.find(command => command.name === 'reveal-original')?.shortcut).toBe('Alt+Shift+O');
+  await popup.close();
+});
+
+test('a missing pack leaves one language original while other passages translate, and setup targets the missing source', async () => {
+  await control.evaluate(() => chrome.storage.local.set({ testUnavailablePair: 'it:en' }));
+  await shop.evaluate(() => {
+    const section = document.createElement('section'); section.id = 'mixed-packs';
+    section.innerHTML = '<p id="italian-pack" lang="it">Ciao</p><p id="polish-pack" lang="pl">Witaj.</p>';
+    document.body.append(section);
+  });
+  await expect(shop.locator('#polish-pack')).toHaveText('Hello.');
+  await expect(shop.locator('#italian-pack')).toHaveText('Ciao');
+  const popup = await context.newPage(); await shop.bringToFront();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await expect(popup.locator('#badge')).toHaveText('Partial');
+  await popup.screenshot({ path: 'work/missing-pack-preview.png', fullPage: true });
+  await expect(popup.getByRole('button', { name: 'Retry translation', exact: true })).toBeEnabled();
+  await expect(popup.locator('#restore-partial')).toBeVisible();
+  const opened = context.waitForEvent('page');
+  await popup.getByRole('button', { name: 'Prepare Italian → English', exact: true }).click();
+  const setup = await opened;
+  await expect(setup).toHaveURL(`chrome-extension://${extensionId}/setup.html?tabId=${tabId}&source=it`);
+  await expect(setup.locator('#detected-language')).toHaveText('Language pack: Italian');
+  await expect(setup.getByLabel('Source language', { exact: true })).toHaveValue('auto');
+  await setup.getByRole('button', { name: 'Download & enable translation', exact: true }).click();
+  await expect(setup.locator('#sample-result')).toHaveText('it:en:Ciao.');
+  await expect(shop.locator('#italian-pack')).toHaveText('it:en:Ciao');
+  await expect(popup.locator('#badge')).toHaveText('Live');
+  await expect(popup.locator('#restore-partial')).toBeHidden();
+  await setup.close(); await popup.close();
+});
+
+test('mixed passages detect different sources, preserve target and understood text, and work in bilingual mode', async () => {
+  const french = 'Bonjour et bienvenue dans cette boutique. Découvrez toutes les informations disponibles pour préparer votre prochaine visite.';
+  const spanish = 'Hola y bienvenidos a esta tienda. Aquí encontrará toda la información necesaria para preparar su próxima visita.';
+  const english = 'Welcome to this shop. All of the information on this page is already available in your preferred English language.';
+  await shop.evaluate(({ french, spanish, english }) => {
+    const section = document.createElement('section'); section.id = 'mixed-reading';
+    for (const [id, value] of [['french-region', french], ['spanish-region', spanish], ['english-region', english]]) {
+      const p = document.createElement('p'); p.id = id; p.textContent = value; section.append(p);
+    }
+    const labels = document.createElement('div'); labels.innerHTML = '<p id="french-menu" lang="fr">Menu</p><p id="polish-menu" lang="pl">Menu</p><div contenteditable="true">Private draft</div>';
+    section.append(labels); document.body.append(section);
+  }, { french, spanish, english });
+  await expect(shop.locator('#french-region')).toHaveText('fr:en:' + french);
+  await expect(shop.locator('#spanish-region')).toHaveText('es:en:' + spanish);
+  await expect(shop.locator('#english-region')).toHaveText(english);
+  await expect(shop.locator('#french-menu')).toHaveText('fr:en:Menu');
+  await expect(shop.locator('#polish-menu')).toHaveText('English: Menu');
+  const popup = await context.newPage(); await shop.bringToFront();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await expect(popup.locator('#summary')).toContainText('French');
+  await expect(popup.locator('#summary')).toContainText('Spanish');
+  await control.getByLabel('Keep original (optional)', { exact: true }).selectOption(['fr']);
+  await control.getByRole('button', { name: 'Save understood languages' }).click();
+  await expect(shop.locator('#french-region')).toHaveText(french);
+  await expect(shop.locator('#spanish-region')).toHaveText('es:en:' + spanish);
+  await popup.locator('#preferences > summary').click();
+  await popup.getByLabel('Reading mode', { exact: true }).selectOption('bilingual');
+  await expect(shop.locator('#spanish-region [data-lingua-lens-translation] .text')).toHaveText('es:en:' + spanish);
+  await expect(shop.locator('#french-region [data-lingua-lens-translation]')).toHaveCount(0);
+  await expect(shop.locator('#english-region [data-lingua-lens-translation]')).toHaveCount(0);
+  await expect(shop.locator('[contenteditable]')).toHaveText('Private draft');
+  await shop.screenshot({ path: 'work/mixed-language-preview.png', fullPage: true });
+  await popup.getByLabel('Reading mode', { exact: true }).selectOption('translated');
+  await control.getByLabel('Keep original (optional)', { exact: true }).selectOption([]);
+  await control.getByRole('button', { name: 'Save understood languages' }).click();
+  await expect(shop.locator('#french-region')).toHaveText('fr:en:' + french);
+  await shop.evaluate(spanish => { document.querySelector('#french-region')!.textContent = spanish; }, spanish);
+  await expect(shop.locator('#french-region')).toHaveText('es:en:' + spanish);
+  await shop.evaluate(() => { document.querySelector('#polish-menu')!.setAttribute('lang', 'es'); });
+  await expect(shop.locator('#polish-menu')).toHaveText('es:en:Menu');
+  await shop.evaluate(() => { document.querySelector('#polish-menu')!.setAttribute('lang', 'en'); });
+  await expect(shop.locator('#polish-menu')).toHaveText('Menu');
+  await shop.evaluate(french => {
+    const paragraph = document.createElement('p'); paragraph.id = 'hidden-language'; paragraph.hidden = true; paragraph.textContent = french; document.body.append(paragraph);
+  }, french);
+  await expect(shop.locator('#hidden-language')).toBeHidden();
+  await shop.evaluate(() => { (document.querySelector('#hidden-language') as HTMLElement).hidden = false; });
+  await expect(shop.locator('#hidden-language')).toHaveText('fr:en:' + french);
   await popup.close();
 });

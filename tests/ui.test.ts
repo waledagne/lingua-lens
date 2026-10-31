@@ -9,8 +9,11 @@ async function until(check: () => boolean): Promise<void> {
   for (let i = 0; i < 300; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
   assert.ok(check(), 'UI did not reach the expected state');
 }
-async function ui(t: TestContext, name: 'popup' | 'setup', website = true, options: { context?: SourceContext; detectedSource?: string; detectorReady?: boolean; pageStatus?: PageStatus; permissionGranted?: boolean; autoSite?: boolean; detectionUnavailable?: boolean; sitePair?: Settings['pair']; never?: boolean; pendingDownload?: boolean } = {}) {
-  const window = new Window({ url: 'chrome-extension://lens/' + name + '.html' + (options.context ? '?tabId=1' : ''), settings: { enableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true } });
+async function ui(t: TestContext, name: 'popup' | 'setup', website = true, options: { context?: SourceContext; detectedSource?: string; detectorReady?: boolean; pageStatus?: PageStatus; permissionGranted?: boolean; autoSite?: boolean; detectionUnavailable?: boolean; sitePair?: Settings['pair']; never?: boolean; pendingDownload?: boolean; sourceHint?: string } = {}) {
+  const parameters = new URLSearchParams();
+  if (options.context) parameters.set('tabId', '1');
+  if (options.sourceHint) parameters.set('source', options.sourceHint);
+  const window = new Window({ url: 'chrome-extension://lens/' + name + '.html?' + parameters.toString(), settings: { enableJavaScriptEvaluation: true, disableJavaScriptFileLoading: true } });
   const document = window.document as unknown as Document;
   const html = (await readFile('public/' + name + '.html', 'utf8')).replace(/<script\b[^>]*>[\s\S]*?<\/script>/gu, '');
   document.write(html);
@@ -19,11 +22,13 @@ async function ui(t: TestContext, name: 'popup' | 'setup', website = true, optio
   const messages: BackgroundRequest[] = [];
   const prepared: string[] = [];
   const permissionRequests: string[][] = [];
+  const opened: string[] = [];
   const manifest = JSON.parse(await readFile('public/manifest.json', 'utf8')) as { optional_host_permissions: string[] };
   const mock = {
-    tabs: { query: async () => [{ id: 1, url: website ? 'https://www.example.com' : 'chrome://extensions' }] },
+    tabs: { query: async () => [{ id: 1, url: website ? 'https://www.example.com' : 'chrome://extensions' }], create: async ({ url }: { url: string }) => { opened.push(url); } },
     runtime: {
       openOptionsPage: async () => {},
+      getURL: (name: string) => 'chrome-extension://lens/' + name,
       sendMessage: async (message: BackgroundRequest) => {
         messages.push(message);
         if (message.type === 'languages') {
@@ -78,7 +83,7 @@ async function ui(t: TestContext, name: 'popup' | 'setup', website = true, optio
   };
   const button = (id: string) => document.getElementById(id) as HTMLButtonElement;
   await until(() => !(document.getElementById('source-language') as HTMLSelectElement).disabled);
-  return { document, select, button, messages, prepared, permissionRequests };
+  return { document, select, button, messages, prepared, permissionRequests, opened };
 }
 
 test('automatic translation requests declared schemes for only the selected site and enables the switch', async t => {
@@ -272,4 +277,38 @@ test('reveal original is available on a running page and routes independently of
   button('reveal-original').click();
   await until(() => messages.some(message => message.type === 'reveal-original') && !button('reveal-original').disabled);
   assert.equal(messages.some(message => message.type === 'selection'), false);
+});
+
+test('mixed-language status lists sources and partial results keep retry, pause, and the correct pack setup available', async t => {
+  const { document, button, opened, messages } = await ui(t, 'popup', true, { detectorReady: true, pageStatus: {
+    enabled: true, translated: 3, pending: 0, error: null, detectedSource: null, detectedSources: ['pl', 'it', 'en'], untranslated: 1,
+    issues: [{ sourceLanguage: 'it', message: 'Prepare Italian → English first.' }],
+  } });
+  assert.equal(document.getElementById('badge')!.textContent, 'Partial');
+  assert.equal(button('toggle').textContent, 'Retry translation');
+  assert.equal(button('restore-partial').hidden, false); assert.equal(button('setup').textContent, 'Prepare Italian → English');
+  button('setup').click();
+  await until(() => opened.length === 1);
+  assert.equal(opened[0], 'chrome-extension://lens/setup.html?tabId=1&source=it');
+  button('restore-partial').click();
+  await until(() => messages.some(message => message.type === 'toggle' && !message.enabled) && !button('restore-partial').disabled);
+});
+
+test('successful mixed-language status shows all detected languages instead of target-only passthrough', async t => {
+  const { document } = await ui(t, 'popup', true, { detectorReady: true, pageStatus: {
+    enabled: true, translated: 3, pending: 0, error: null, detectedSource: null, detectedSources: ['pl', 'fr', 'en'], untranslated: 0,
+  } });
+  assert.equal(document.getElementById('badge')!.textContent, 'Live');
+  assert.match(document.getElementById('summary')!.textContent!, /Polish, French, English/);
+});
+
+test('setup prepares a requested missing source pack without replacing automatic language preferences', async t => {
+  const { document, button, prepared, messages } = await ui(t, 'setup', true, { detectorReady: true, sourceHint: 'it', context: { sample: 'Bonjour sur cette page.', pageLanguage: 'fr' } });
+  await until(() => !button('prepare').disabled);
+  assert.equal(document.getElementById('detected-language')!.textContent, 'Language pack: Italian');
+  button('prepare').click();
+  await until(() => !button('check-again').disabled && !document.getElementById('sample')!.hidden);
+  assert.deepEqual(prepared, ['it:en']);
+  assert.equal(messages.some(message => message.type === 'languages'), false);
+  assert.ok(messages.some(message => message.type === 'ready' && message.pair.sourceLanguage === 'auto' && message.detectedSource === 'it'));
 });

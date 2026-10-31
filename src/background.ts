@@ -3,6 +3,7 @@ import { forSite, readSettings, storedSettings } from './settings';
 import { collectSourceContext } from './source-context';
 import { normalizeLanguage, validateContext } from './source-detector';
 import { readSelection } from './selection';
+import { validatePassages } from './passage-engine';
 
 async function settings(): Promise<Settings> {
   return readSettings(await chrome.storage.local.get(null));
@@ -156,6 +157,14 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
     const context = validateContext(message.context);
     await engine();
     return unwrap<string>(await chrome.runtime.sendMessage({ target: 'engine', type: 'detect', context }));
+  }
+  if (message.type === 'translate-passages') {
+    if (sender.tab?.id === undefined || sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('Passage translation must come from a webpage.');
+    const { texts, contexts } = validatePassages(message.texts, message.contexts);
+    const pair = parsePair(message.pair), state = await tabState(sender.tab.id, false);
+    if (!state.enabled || pair.sourceLanguage !== 'auto' || pairKey(pair) !== pairKey(state.pair)) throw new Error('Translation settings changed or translation is paused.');
+    await engine();
+    return unwrap(await chrome.runtime.sendMessage({ target: 'engine', type: 'translate-passages', texts, contexts, pair, understoodLanguages: state.understoodLanguages ?? [] }));
   }
   if (message.type === 'translate') {
     if (sender.tab?.id === undefined) throw new Error('Translation requests must come from a webpage.');

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
-import { pairKey, unwrap, type BackgroundRequest, type Reply, type SelectionView, type Settings, type TabState } from '../src/shared.ts';
+import { pairKey, unwrap, type BackgroundRequest, type PassageTranslation, type Reply, type SelectionView, type Settings, type SourceContext, type TabState } from '../src/shared.ts';
 
 test('background migrates settings and manages languages and arbitrary websites', async t => {
   const local: Record<string, unknown> = { ready: true };
@@ -19,6 +19,7 @@ test('background migrates settings and manages languages and arbitrary websites'
   let finishSelection: ((texts: string[]) => void) | undefined;
   const until = async (check: () => boolean) => { for (let i = 0; i < 200; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)); } assert.ok(check()); };
   let contexts = 0, refreshed = 0, engineRequests = 0;
+  let forwardedUnderstood: string[] = [];
   const area = (data: Record<string, unknown>) => ({
     get: async (keys: null | string | string[]) => keys === null ? structuredClone(data) : Object.fromEntries((typeof keys === 'string' ? [keys] : keys).map(key => [key, structuredClone(data[key])])),
     set: async (values: Record<string, unknown>) => { Object.assign(data, structuredClone(values)); },
@@ -33,8 +34,12 @@ test('background migrates settings and manages languages and arbitrary websites'
       onMessage: { addListener(callback: typeof listener) { listener = callback; } },
       onInstalled: { addListener(callback: typeof installed) { installed = callback; } }, onStartup: event, ContextType: { OFFSCREEN_DOCUMENT: 'OFFSCREEN_DOCUMENT' },
       getContexts: async () => contexts ? [{}] : [],
-      sendMessage: async (message: { type: string; pair: Settings['pair']; texts: string[] }) => {
+      sendMessage: async (message: { type: string; pair: Settings['pair']; texts: string[]; contexts?: SourceContext[]; understoodLanguages?: string[] }) => {
         engineRequests++;
+        if (message.type === 'translate-passages') {
+          forwardedUnderstood = message.understoodLanguages ?? [];
+          return { ok: true, data: { translations: message.texts.map(text => 'passage:' + text), sources: message.contexts!.map(context => context.pageLanguage), issues: message.texts.map(() => null) } };
+        }
         if (message.type === 'translate' && message.texts[0] === 'Delayed selection') return { ok: true, data: await new Promise<string[]>(resolve => { finishSelection = resolve; }) };
         return { ok: true, data: message.type === 'detect' ? 'fr' : message.texts.map(text => pairKey(message.pair) + ':' + text) };
       },
@@ -257,5 +262,22 @@ test('background migrates settings and manages languages and arbitrary websites'
     await send({ target: 'background', type: 'reveal-original', tabId: 1 });
     assert.match(views.at(-1)?.error ?? '', /Select translated page text/);
     assert.equal(views.at(-1)?.result, undefined);
+  });
+  await t.test('passage routing validates bounds, enforces active automatic settings, and uses trusted language preferences', async () => {
+    const pair = { sourceLanguage: 'auto', targetLanguage: 'en' };
+    await send({ target: 'background', type: 'languages', pair });
+    await send({ target: 'background', type: 'understood-languages', languages: ['de'] });
+    await send({ target: 'background', type: 'toggle', tabId: 1, enabled: true });
+    const message = { target: 'background', type: 'translate-passages', texts: ['Bonjour'], contexts: [{ sample: 'Bonjour', pageLanguage: 'fr' }], pair } as const;
+    const request: BackgroundRequest = { ...message, texts: [...message.texts], contexts: [...message.contexts] };
+    const result = await send<PassageTranslation>(request, page);
+    assert.deepEqual(result.translations, ['passage:Bonjour']); assert.deepEqual(forwardedUnderstood, ['de']);
+    await assert.rejects(send(request), /webpage/);
+    await assert.rejects(send({ ...request, contexts: [] }, page), /Invalid passage/);
+    await send({ target: 'background', type: 'toggle', tabId: 1, enabled: false });
+    await assert.rejects(send(request, page), /paused/);
+    await send({ target: 'background', type: 'languages', pair: { sourceLanguage: 'pl', targetLanguage: 'en' } });
+    await send({ target: 'background', type: 'toggle', tabId: 1, enabled: true });
+    await assert.rejects(send(request, page), /settings changed/);
   });
 });

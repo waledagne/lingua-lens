@@ -1,6 +1,6 @@
 import { errorMessage, LANGUAGES, languageName, pairKey, pairLabel, request, sampleText, type LanguagePair, type Settings, type SourceContext, type TabState } from './shared';
 import { detectorAPI, translatorAPI, type DownloadMonitor, type LocalLanguageDetector } from './translator-api';
-import { detectSource } from './source-detector';
+import { detectSource, normalizeLanguage } from './source-detector';
 import { LanguageControls } from './language-controls';
 
 const prepare = document.getElementById('prepare') as HTMLButtonElement;
@@ -10,6 +10,7 @@ const errorBox = document.getElementById('setup-error')!;
 const detectedLabel = document.getElementById('detected-language')!;
 const tabParameter = new URL(location.href).searchParams.get('tabId');
 const contextTab = tabParameter && /^\d+$/u.test(tabParameter) ? Number(tabParameter) : null;
+const requestedSource = normalizeLanguage(new URL(location.href).searchParams.get('source') ?? '');
 const finish = document.getElementById('finish-setup') as HTMLButtonElement;
 const retry = document.getElementById('check-again') as HTMLButtonElement;
 const cancel = document.getElementById('cancel-setup') as HTMLButtonElement;
@@ -52,7 +53,7 @@ function updateForm(): void {
   try { controls.read(); } catch (error) { invalid = errorMessage(error); }
   controls.apply.disabled = busy || !current || !dirty || !!invalid;
   document.getElementById('language-hint')!.textContent = invalid ?? (dirty ? (siteSetup ? 'Apply your selection for this website.' : 'Apply your selection as the default for websites.') :
-    current?.pair.sourceLanguage === 'auto' ? 'Choose only your target language. The source is detected per page.' : siteSetup ? 'Manual source selection applies to this website.' : 'Manual source selection applies to websites using your defaults.');
+    current?.pair.sourceLanguage === 'auto' ? 'Choose only your target language. Each passage can use a different detected source.' : siteSetup ? 'Manual source selection applies to this website.' : 'Manual source selection applies to websites using your defaults.');
   retry.disabled = busy || dirty;
   finish.disabled = busy || dirty;
   cancel.hidden = !busy || !setupAbort;
@@ -84,14 +85,14 @@ async function checkAvailability(): Promise<void> {
       const instance = detector ?? await factory.create();
       if (sequence !== checkSequence) { if (instance !== detector) instance.destroy(); return; }
       detector = instance;
-      const context = await pageContext();
+      const context = requestedSource ? null : await pageContext();
       if (sequence !== checkSequence) return;
       // A real sample translation makes first-run setup testable without a website.
       const demoSource = selected.targetLanguage === 'es' ? 'fr' : 'es';
-      detected = context ? await detectSource(instance, context) : demoSource;
+      detected = requestedSource ?? (context ? await detectSource(instance, context) : demoSource);
       if (sequence !== checkSequence) return;
       detectedLabel.hidden = false;
-      detectedLabel.textContent = (context ? 'Detected page language: ' : 'Practice sample: ') + languageName(detected);
+      detectedLabel.textContent = (requestedSource ? 'Language pack: ' : context ? 'Detected page language: ' : 'Practice sample: ') + languageName(detected);
       if (detected === selected.targetLanguage) {
         plan = { type: 'already-target', key: pairKey(selected), actualPair: { sourceLanguage: detected, targetLanguage: selected.targetLanguage } };
         prepare.textContent = 'Enable on this page'; prepare.disabled = false;

@@ -42,23 +42,29 @@ function render(state: TabState): void {
   get('language-hint').textContent = invalid ?? (scope.value === 'site' ? 'These languages apply only to ' + state.site + '.' : state.sitePreference?.pair ? 'Changes update defaults. This site keeps its own languages.' : 'Defaults apply to websites without their own languages.');
   const running = state.status?.enabled ?? state.enabled;
   const pageError = state.status?.error;
-  const error = actionError ?? pageError;
+  const issue = state.status?.issues?.[0];
+  const untranslated = state.status?.untranslated ?? 0;
+  const partial = untranslated > 0;
+  const error = actionError ?? pageError ?? issue?.message;
   const detected = state.pair.sourceLanguage === 'auto' ? state.status?.detectedSource : null;
+  const sources = state.pair.sourceLanguage === 'auto' ? state.status?.detectedSources ?? [] : [];
   const alreadyTarget = !!detected && detected === state.pair.targetLanguage;
   get('site').textContent = state.site || 'Open a website';
   get('dot').classList.toggle('active', running && !pageError);
   const blocked = pendingNever ?? !!state.sitePreference?.never;
   const understood = detected && state.understoodLanguages?.includes(detected);
-  get('badge').textContent = !state.site ? 'Unavailable' : blocked ? 'Excluded' : !state.ready ? 'Setup needed' : pageError ? 'Needs attention' : running && (alreadyTarget || understood) ? 'Original' : running ? 'Live' : 'Paused';
-  if (running && alreadyTarget) get('badge').textContent = 'Already translated';
+  get('badge').textContent = !state.site ? 'Unavailable' : blocked ? 'Excluded' : !state.ready ? 'Setup needed' : pageError ? 'Needs attention' : partial ? 'Partial' : running && (alreadyTarget || understood) ? 'Original' : running ? 'Live' : 'Paused';
+  if (running && alreadyTarget && !partial && !pageError && !blocked) get('badge').textContent = 'Already translated';
   get('summary').textContent = !state.site ? 'Open an ordinary website to translate. Chrome protects its settings, Web Store, and PDF viewer.' :
     blocked ? 'This website is excluded. Turn off Never translate this site to translate it.' :
     !state.ready ? 'Prepare ' + pairLabel(state.pair) + ' to start translating.' :
     pageError ? 'Translation stopped. Try again or reopen setup.' :
+    partial ? String(untranslated) + (untranslated === 1 ? ' passage needs' : ' passages need') + ' attention. Other passages continue translating. Prepare missing packs or choose a source manually, then retry.' :
+    running && sources.length > 1 ? 'Detected ' + sources.map(languageName).join(', ') + '. Translating each passage into ' + languageName(state.pair.targetLanguage) + '.' :
     running && alreadyTarget ? 'This page is already in ' + languageName(detected!) + '. No translation is needed.' :
     running && understood ? 'Keeping ' + languageName(detected!) + ' because you understand this language.' :
     running && detected ? 'Detected ' + languageName(detected) + '. Watching for new text, menus, and dialogs.' :
-    running ? (state.pair.sourceLanguage === 'auto' ? 'Detecting the page language and watching for new content.' : 'Watching for new text, menus, and dialogs.') : 'Translate this page and keep up as it changes.';
+    running ? (state.pair.sourceLanguage === 'auto' ? 'Detecting passage languages and watching for new content.' : 'Watching for new text, menus, and dialogs.') : 'Translate this page and keep up as it changes.';
   get('translated').textContent = String(state.status?.translated ?? 0);
   get('pending').textContent = state.status?.pending ? String(state.status.pending) + ' queued' : '';
   get('metrics').hidden = !state.ready || !state.site || !running;
@@ -68,10 +74,13 @@ function render(state: TabState): void {
   toggle.disabled = busy || dirty || !state.site || blocked;
   selection.disabled = busy || dirty || !state.site || blocked;
   reveal.disabled = busy || dirty || !state.site || blocked || !running;
-  toggle.textContent = pageError ? 'Retry translation' : running ? 'Pause & restore original' : 'Translate this page';
-  setup.hidden = state.ready && !pageError;
+  toggle.textContent = pageError || partial ? 'Retry translation' : running ? 'Pause & restore original' : 'Translate this page';
+  setup.hidden = state.ready && !pageError && !partial;
   setup.disabled = busy || dirty;
-  setup.textContent = !state.ready && state.pair.sourceLanguage === 'auto' ? 'Enable automatic detection' : 'Prepare ' + pairLabel(detected ? { sourceLanguage: detected, targetLanguage: state.pair.targetLanguage } : state.pair);
+  const packSource = state.status?.issues?.find(problem => problem.sourceLanguage)?.sourceLanguage ?? detected;
+  setup.textContent = !state.ready && state.pair.sourceLanguage === 'auto' ? 'Enable automatic detection' : packSource ? 'Prepare ' + pairLabel({ sourceLanguage: packSource, targetLanguage: state.pair.targetLanguage }) : state.pair.sourceLanguage !== 'auto' ? 'Prepare ' + pairLabel(state.pair) : 'Languages & setup';
+  get('restore-partial').hidden = !partial || !running;
+  (get('restore-partial') as HTMLButtonElement).disabled = busy || dirty;
   auto.checked = pendingAuto ?? state.autoSites.includes(state.site);
   auto.disabled = busy || dirty || !state.site || !state.ready || blocked;
   never.checked = blocked; never.disabled = busy || dirty || !state.site;
@@ -134,11 +143,18 @@ reveal.addEventListener('click', async () => {
   finally { busy = false; await refresh(); }
 });
 get('shortcuts').addEventListener('click', () => { void chrome.tabs.create({ url: 'chrome://extensions/shortcuts' }); });
+get('restore-partial').addEventListener('click', async () => {
+  if (tab?.id === undefined || busy || dirty || !current) return;
+  busy = true; actionError = null; render(current);
+  try { await request({ target: 'background', type: 'toggle', tabId: tab.id, enabled: false }); }
+  catch (error) { actionError = errorMessage(error); }
+  finally { busy = false; await refresh(); }
+});
 toggle.addEventListener('click', async () => {
   if (tab?.id === undefined || !current || busy || dirty) return;
   busy = true; actionError = null; render(current);
   try {
-    const enabled = current.status?.error ? true : !(current.status?.enabled ?? current.enabled);
+    const enabled = current.status?.error || current.status?.untranslated ? true : !(current.status?.enabled ?? current.enabled);
     await request<TabState>({ target: 'background', type: 'toggle', tabId: tab.id, enabled });
   } catch (error) { actionError = errorMessage(error); }
   finally { busy = false; await refresh(); }
@@ -158,7 +174,8 @@ auto.addEventListener('change', async () => {
   finally { pendingAuto = null; busy = false; await refresh(); }
 });
 function openSetup(): void {
-  if (tab?.id !== undefined && current?.site) void chrome.tabs.create({ url: chrome.runtime.getURL('setup.html') + '?tabId=' + String(tab.id) });
+  const source = current?.status?.issues?.find(problem => problem.sourceLanguage)?.sourceLanguage;
+  if (tab?.id !== undefined && current?.site) void chrome.tabs.create({ url: chrome.runtime.getURL('setup.html') + '?tabId=' + String(tab.id) + (source ? '&source=' + encodeURIComponent(source) : '') });
   else void chrome.runtime.openOptionsPage();
 }
 setup.addEventListener('click', openSetup);

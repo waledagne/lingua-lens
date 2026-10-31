@@ -1,6 +1,5 @@
 import { DomTranslator } from './dom-translator';
-import { DEFAULT_PAIR, pairKey, request, type PageRequest, type TabState } from './shared';
-import { collectSourceContext } from './source-context';
+import { DEFAULT_PAIR, pairKey, request, type PageRequest, type PassageTranslation, type TabState } from './shared';
 import { SelectionPanel } from './selection-panel';
 
 const scope = globalThis as typeof globalThis & { __linguaLens?: DomTranslator };
@@ -8,21 +7,23 @@ if (!scope.__linguaLens) {
   let pair = DEFAULT_PAIR;
   let configurationSequence = 0;
   let generation = 0;
-  let detectedSource: string | null = null;
   let understoodKey = '';
   let readingMode = 'translated';
   const selection = new SelectionPanel(document, () => request({ target: 'background', type: 'open-setup' }));
-  const controller = new DomTranslator(document, async texts => {
+  const controller = new DomTranslator(document, async (texts, contexts) => {
     const snapshot = { ...pair }, version = generation;
     let source = snapshot.sourceLanguage;
     if (source === 'auto') {
-      source = detectedSource ?? await request<string>({ target: 'background', type: 'detect', context: collectSourceContext(document), pair: snapshot });
+      const result = await request<PassageTranslation>({ target: 'background', type: 'translate-passages', texts, contexts, pair: snapshot });
       if (version !== generation) throw new Error('Language selection changed.');
-      detectedSource = source;
+      return result;
     }
     return request<string[]>({ target: 'background', type: 'translate', texts, pair: snapshot, sourceLanguage: source });
   });
-  const status = () => ({ ...controller.status(), detectedSource });
+  const status = () => {
+    const state = controller.status(), sources = state.detectedSources ?? [];
+    return { ...state, detectedSource: sources.length === 1 ? sources[0] : null };
+  };
   scope.__linguaLens = controller;
   const configure = async () => {
     const sequence = ++configurationSequence;
@@ -30,7 +31,8 @@ if (!scope.__linguaLens) {
       const state = await request<TabState>({ target: 'background', type: 'state' });
       if (sequence !== configurationSequence) return;
       const nextUnderstood = JSON.stringify(state.understoodLanguages ?? []);
-      if (pairKey(pair) !== pairKey(state.pair) || nextUnderstood !== understoodKey || readingMode !== (state.readingMode ?? 'translated')) { controller.stop(); pair = state.pair; detectedSource = null; understoodKey = nextUnderstood; readingMode = state.readingMode ?? 'translated'; generation++; }
+      if (pairKey(pair) !== pairKey(state.pair) || nextUnderstood !== understoodKey || readingMode !== (state.readingMode ?? 'translated')) { controller.stop(); pair = state.pair; understoodKey = nextUnderstood; readingMode = state.readingMode ?? 'translated'; generation++; }
+      controller.setAutomaticDetection(pair.sourceLanguage === 'auto');
       controller.setReadingMode(state.readingMode ?? 'translated', pair.targetLanguage);
       if (state.enabled) controller.start(); else { controller.stop(); generation++; }
     } catch { if (sequence === configurationSequence) { controller.stop(); generation++; } }

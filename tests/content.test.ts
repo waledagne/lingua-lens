@@ -4,6 +4,7 @@ import { build } from 'esbuild';
 import { Window } from 'happy-dom';
 import { pairKey, type BackgroundRequest, type LanguagePair, type PageStatus, type SourceContext, type TabState } from '../src/shared.ts';
 import type { DomTranslator } from '../src/dom-translator.ts';
+import { PassageEngine } from '../src/passage-engine.ts';
 
 async function until(check: () => boolean): Promise<void> {
   for (let i = 0; i < 300; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)); }
@@ -15,11 +16,13 @@ async function content(t: TestContext, translate: (texts: string[], pair: Langua
   document.body.innerHTML = '<p>Witaj</p>';
   const config: TabState = { pair: { sourceLanguage: 'pl', targetLanguage: 'en' }, detectorReady: true, ready: true, preparedPairs: ['pl:en'], autoSites: [], enabled: true, site: 'example.com', status: null };
   if (options?.automatic) config.pair.sourceLanguage = 'auto';
+  const passages = new PassageEngine(context => options!.detect(context), translate);
   let listener!: (message: unknown, sender: unknown, respond: (value: unknown) => void) => void;
   Object.assign(window, { chrome: { runtime: {
     id: 'lens', onMessage: { addListener(callback: typeof listener) { listener = callback; } },
     sendMessage: async (message: BackgroundRequest) => {
       if (message.type === 'detect') return { ok: true, data: await options!.detect(message.context) };
+      if (message.type === 'translate-passages') return { ok: true, data: await passages.run(message.texts, message.contexts, message.pair.targetLanguage, config.understoodLanguages ?? []) };
       if (message.type === 'translate') return { ok: true, data: message.sourceLanguage === message.pair.targetLanguage ? message.texts : await translate(message.texts, { ...message.pair, sourceLanguage: message.sourceLanguage ?? message.pair.sourceLanguage }) };
       return { ok: true, data: structuredClone(config) };
     },
@@ -48,7 +51,7 @@ test('actual content script restores source text and changes the pair on all fol
   config.enabled = false; await refresh();
   assert.equal(document.querySelector('p')!.textContent, 'Witaj');
 });
-test('automatic content detection is reused for new dialogs and reset when the target changes', async t => {
+test('automatic content detection checks new passages and resets when the target changes', async t => {
   let detections = 0;
   const calls: string[] = [];
   const { document, config, refresh, status } = await content(t, async (texts, pair) => { calls.push(pairKey(pair)); return texts.map(text => pairKey(pair) + ':' + text); }, {
@@ -57,10 +60,10 @@ test('automatic content detection is reused for new dialogs and reset when the t
   await until(() => document.querySelector('p')!.textContent === 'pl:en:Witaj');
   assert.equal(status().detectedSource, 'pl');
   const modal = document.createElement('dialog'); modal.textContent = 'Dostawa'; document.body.append(modal);
-  await until(() => modal.textContent === 'pl:en:Dostawa'); assert.equal(detections, 1);
+  await until(() => modal.textContent === 'pl:en:Dostawa'); assert.equal(detections, 2);
   config.pair.targetLanguage = 'fr'; await refresh();
   await until(() => document.querySelector('p')!.textContent === 'pl:fr:Witaj');
-  assert.equal(detections, 2); assert.deepEqual(calls, ['pl:en', 'pl:en', 'pl:fr']);
+  assert.equal(detections, 4); assert.deepEqual(calls, ['pl:en', 'pl:en', 'pl:fr']);
 });
 test('automatic mode passes through pages already in the target language', async t => {
   let translations = 0;

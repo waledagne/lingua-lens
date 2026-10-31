@@ -2,19 +2,23 @@ import type { LanguagePair } from './languages';
 export * from './languages';
 export const MAX_TEXT = 12000;
 export const MAX_BATCH = 32;
+export const MAX_PASSAGE_CONTEXT = 1600;
 
 export type Reply<T> = { ok: true; data: T } | { ok: false; error: string };
 export interface SourceContext { sample: string; pageLanguage: string }
+export interface PassageIssue { sourceLanguage: string | null; message: string }
+export interface PassageTranslation { translations: string[]; sources: (string | null)[]; issues: (PassageIssue | null)[] }
 export type ReadingMode = 'translated' | 'bilingual';
 export interface OriginalPassage { original: string; translated: string }
 export interface SitePreference { pair?: LanguagePair; never?: boolean; readingMode?: ReadingMode }
 export interface Settings { pair: LanguagePair; preparedPairs: string[]; detectorReady: boolean; ready: boolean; autoSites: string[]; sitePreferences?: Record<string, SitePreference>; understoodLanguages?: string[]; readingMode?: ReadingMode }
-export interface PageStatus { enabled: boolean; translated: number; pending: number; error: string | null; detectedSource?: string | null }
+export interface PageStatus { enabled: boolean; translated: number; pending: number; error: string | null; detectedSource?: string | null; detectedSources?: string[]; untranslated?: number; issues?: PassageIssue[] }
 export interface TabState extends Settings { enabled: boolean; site: string; status: PageStatus | null; defaultPair?: LanguagePair; defaultReadingMode?: ReadingMode; sitePreference?: SitePreference }
 export interface SelectionView { id: string; original: string; label: string; result?: string; error?: string }
 export type BackgroundRequest =
   | { target: 'background'; type: 'state'; tabId?: number }
   | { target: 'background'; type: 'translate'; texts: string[]; pair: LanguagePair; sourceLanguage?: string }
+  | { target: 'background'; type: 'translate-passages'; texts: string[]; contexts: SourceContext[]; pair: LanguagePair }
   | { target: 'background'; type: 'detect'; context: SourceContext; pair: LanguagePair }
   | { target: 'background'; type: 'source-context'; tabId: number }
   | { target: 'background'; type: 'languages'; pair: LanguagePair; tabId?: number }

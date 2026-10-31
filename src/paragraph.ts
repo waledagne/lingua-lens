@@ -1,4 +1,5 @@
 import { languageName, MAX_TEXT } from './shared';
+import { languageFor, languageKey } from './dom-language';
 
 export const READING_BLOCKS = 'p,h1,h2,h3,h4,h5,h6,li,blockquote,figcaption,dt,dd';
 const COMPLEX_CONTENT = 'div,section,article,ul,ol,table,button,input,select,textarea,iframe,canvas,svg,pre,code,[contenteditable]:not([contenteditable="false"]),[translate="no"],[role="button"],[role="textbox"]';
@@ -8,6 +9,7 @@ export interface ParagraphSnapshot { parts: { node: Node; value: string }[]; tex
 export function readingBlock(element: Element, eligible: (element: Element) => boolean): Element | null {
   const block = element.closest(READING_BLOCKS);
   if (!block || !eligible(block) || block.matches('[role="button"],[tabindex],[contenteditable]')) return null;
+  if (Array.from(block.querySelectorAll('[lang]')).some(child => !child.closest('[data-lingua-lens-ignore]') && languageKey(languageFor(child)) !== languageKey(languageFor(block)))) return null;
   if (Array.from(block.querySelectorAll(READING_BLOCKS + ',' + COMPLEX_CONTENT)).some(child => !child.closest('[data-lingua-lens-ignore]'))) return null;
   return block;
 }

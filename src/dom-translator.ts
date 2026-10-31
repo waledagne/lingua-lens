@@ -1,8 +1,10 @@
-import { errorMessage, MAX_BATCH, MAX_TEXT, withPadding, type OriginalPassage, type PageStatus, type ReadingMode } from './shared';
+import { errorMessage, MAX_BATCH, MAX_TEXT, withPadding, type OriginalPassage, type PageStatus, type PassageIssue, type PassageTranslation, type ReadingMode, type SourceContext } from './shared';
 import { paragraphSnapshot, READING_BLOCKS, readingBlock, renderParagraph, sameParagraph, type ParagraphSnapshot } from './paragraph';
+import { passageContext } from './passage-context';
+import { explicitlyHidden } from './dom-language';
 
-type Translate = (texts: string[]) => Promise<string[]>;
-interface Entry { node: Text | Element; attribute?: string; original: string; translated?: string; paragraph?: ParagraphSnapshot; rendered?: HTMLElement }
+type Translate = (texts: string[], contexts: SourceContext[]) => Promise<string[] | PassageTranslation>;
+interface Entry { node: Text | Element; attribute?: string; original: string; translated?: string; paragraph?: ParagraphSnapshot; rendered?: HTMLElement; sourceLanguage?: string; issue?: PassageIssue }
 const ATTRIBUTES = ['title', 'aria-label', 'placeholder', 'alt'];
 const SKIP = 'script,style,noscript,template,textarea,code,pre,kbd,samp,[contenteditable]:not([contenteditable="false"]),[translate="no"],[data-lingua-lens-ignore]';
 
@@ -23,8 +25,10 @@ export class DomTranslator {
   private mode: ReadingMode = 'translated';
   private targetLanguage = '';
   private scannedParagraphs?: Set<Element>;
+  private automatic = false;
 
   constructor(private document: Document, private translate: Translate, private delay = 80) {}
+  setAutomaticDetection(automatic: boolean): void { this.automatic = automatic; }
   setReadingMode(mode: ReadingMode, targetLanguage = ''): void {
     if (mode === this.mode && targetLanguage === this.targetLanguage) return;
     const running = this.enabled;
@@ -69,14 +73,21 @@ export class DomTranslator {
     return found && original.length <= MAX_TEXT && translated.length <= MAX_TEXT * 4 ? { original, translated } : null;
   }
   status(): PageStatus {
+    const live = [...this.entries].filter(entry => {
+      const element = entry.node.nodeType === 3 ? entry.node.parentElement : entry.node as Element;
+      return entry.node.isConnected && !!element && this.eligible(element) && !explicitlyHidden(element);
+    });
+    const detectedSources = [...new Set(live.flatMap(entry => entry.sourceLanguage ? [entry.sourceLanguage] : []))];
+    const issues = [...new Map(live.flatMap(entry => entry.issue ? [[entry.issue.sourceLanguage + '\0' + entry.issue.message, entry.issue] as const] : [])).values()].slice(0, 5);
     return {
       enabled: this.enabled,
       translated: [...this.entries].filter(entry => entry.node.isConnected && entry.translated !== undefined && entry.translated !== entry.original).length,
-      pending: this.pending.size, error: this.error,
+      pending: this.pending.size, error: this.error, detectedSources, issues, untranslated: live.filter(entry => entry.issue).length,
     };
   }
   start(): void {
     this.suspended = false; this.error = null;
+    for (const entry of this.entries) entry.issue = undefined;
     if (!this.enabled) {
       this.enabled = true; this.generation++;
       this.observe(this.document);
@@ -145,8 +156,9 @@ export class DomTranslator {
     if (!byKey) { byKey = new Map(); this.index.set(node, byKey); }
     let entry = byKey.get(key);
     if (entry?.translated === current) return;
+    if (entry?.issue && entry.original === current) return;
     if (!entry) { entry = { node, attribute, original: current }; byKey.set(key, entry); this.entries.add(entry); }
-    else if (entry.original !== current) { entry.original = current; entry.translated = undefined; }
+    else if (entry.original !== current) { entry.original = current; entry.translated = undefined; entry.issue = undefined; entry.sourceLanguage = undefined; }
     this.pending.add(entry);
   }
   private collectParagraph(block: Element, snapshot: ParagraphSnapshot): void {
@@ -164,9 +176,11 @@ export class DomTranslator {
     if (!byKey) { byKey = new Map(); this.index.set(block, byKey); }
     let entry = byKey.get('#paragraph');
     if (entry && sameParagraph(entry.paragraph!, snapshot)) {
+      if (entry.issue) return;
       if (entry.translated !== undefined && (entry.translated.trim() === entry.original.trim() || entry.rendered?.isConnected)) return;
     } else if (entry) {
       entry.rendered?.remove(); entry.rendered = undefined; entry.translated = undefined;
+      entry.issue = undefined; entry.sourceLanguage = undefined;
       entry.paragraph = snapshot; entry.original = snapshot.text;
     } else {
       entry = { node: block, original: snapshot.text, paragraph: snapshot };
@@ -184,6 +198,33 @@ export class DomTranslator {
       return !!snapshot && entry.original === source && sameParagraph(entry.paragraph, snapshot);
     }
     return this.read(entry) === (entry.translated ?? source);
+  }
+  private context(entry: Entry): SourceContext {
+    const element = entry.node.nodeType === 3 ? entry.node.parentElement! : entry.node as Element;
+    return passageContext(element, entry.original, candidate => this.eligible(candidate), node => {
+      const saved = this.index.get(node)?.get('#text');
+      return saved?.translated !== undefined && node.data === saved.translated ? saved.original : node.data;
+    });
+  }
+  private belongs(node: Node, root: Node): boolean {
+    let current: Node = node;
+    for (;;) {
+      if (root.contains(current)) return true;
+      const tree = current.getRootNode();
+      if (!(tree instanceof this.document.defaultView!.ShadowRoot)) return false;
+      current = tree.host;
+    }
+  }
+  private invalidateContext(root: Element): void {
+    for (const entry of this.entries) {
+      if (!this.belongs(entry.node, root)) continue;
+      if (entry.paragraph) entry.rendered?.remove();
+      else if (entry.translated !== undefined && this.read(entry) === entry.translated) this.write(entry, entry.original);
+      this.entries.delete(entry); this.pending.delete(entry);
+      this.index.get(entry.node)?.delete(entry.paragraph ? '#paragraph' : entry.attribute ?? '#text');
+    }
+    this.scan(root);
+    for (const observed of this.observers.keys()) if (observed instanceof this.document.defaultView!.ShadowRoot && this.belongs(observed, root)) this.scan(observed);
   }
   private scan(root: Node): void {
     const previous = this.scannedParagraphs;
@@ -229,7 +270,8 @@ export class DomTranslator {
         if (record.type === 'characterData') this.collect(record.target as Text);
         else if (record.type === 'attributes') {
           const element = record.target as Element;
-          if (ATTRIBUTES.includes(record.attributeName!)) this.collect(element, record.attributeName!);
+          if (['lang', 'hidden', 'aria-hidden'].includes(record.attributeName!)) this.invalidateContext(element.closest(READING_BLOCKS) ?? element);
+          else if (ATTRIBUTES.includes(record.attributeName!)) this.collect(element, record.attributeName!);
           else this.scan(element);
         } else {
           if (this.mode === 'bilingual' && record.target.nodeType === 1) {
@@ -245,7 +287,7 @@ export class DomTranslator {
       for (const entry of before) this.pending.add(entry);
       this.prune(); this.schedule();
     });
-    observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: [...ATTRIBUTES, 'hidden', 'open', 'contenteditable', 'translate'] });
+    observer.observe(root, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: [...ATTRIBUTES, 'hidden', 'aria-hidden', 'open', 'contenteditable', 'translate', 'lang'] });
     this.observers.set(root, observer);
   }
   private scheduleDiscovery(): void {
@@ -279,28 +321,39 @@ export class DomTranslator {
     if (!this.enabled || this.flushing || this.suspended) return;
     this.flushing = true;
     const generation = this.generation;
-    const batch: { entry: Entry; source: string }[] = [];
-    const unique = new Set<string>();
+    const batch: { entry: Entry; source: string; key: string }[] = [];
+    const unique = new Map<string, { text: string; context: SourceContext }>();
     let total = 0;
     for (const entry of this.pending) {
+      if (!this.entries.has(entry)) { this.pending.delete(entry); continue; }
       if (!entry.node.isConnected) { this.pending.delete(entry); continue; }
       const source = this.read(entry);
       if (!this.current(entry) || source !== entry.original) { this.pending.delete(entry); continue; }
       const text = source.trim();
-      if (!unique.has(text) && (unique.size >= MAX_BATCH || total + text.length > 24000)) break;
-      if (!unique.has(text)) total += text.length;
-      unique.add(text); batch.push({ entry, source }); this.pending.delete(entry);
+      const context = this.automatic ? this.context(entry) : { sample: '', pageLanguage: '' };
+      const key = this.automatic ? text + '\0' + context.pageLanguage + '\0' + context.sample : text;
+      if (!unique.has(key) && (unique.size >= MAX_BATCH || total + text.length > 24000)) break;
+      if (!unique.has(key)) total += text.length;
+      unique.set(key, { text, context }); batch.push({ entry, source, key }); this.pending.delete(entry);
     }
     try {
       if (!batch.length) return;
-      const texts = [...unique];
-      const translations = await this.translate(texts);
+      const values = [...unique.values()], texts = values.map(value => value.text);
+      const result = await this.translate(texts, values.map(value => value.context));
+      const translations = Array.isArray(result) ? result : result.translations;
       if (translations.length !== texts.length || translations.some(text => typeof text !== 'string' || !text.trim())) throw new Error('The translation engine returned an incomplete result.');
+      if (!Array.isArray(result) && (result.sources.length !== texts.length || result.issues.length !== texts.length)) throw new Error('The language detector returned an incomplete result.');
       if (!this.enabled || generation !== this.generation) return;
-      const lookup = new Map(texts.map((text, i) => [text, translations[i]]));
-      for (const { entry, source } of batch) {
+      const lookup = new Map([...unique.keys()].map((key, i) => [key, i]));
+      for (const { entry, source, key } of batch) {
         if (!this.entries.has(entry) || !this.current(entry, source) || this.read(entry) !== source) continue;
-        entry.translated = withPadding(source, lookup.get(source.trim())!);
+        const index = lookup.get(key)!;
+        if (!Array.isArray(result)) {
+          entry.sourceLanguage = result.sources[index] ?? undefined;
+          entry.issue = result.issues[index] ?? undefined;
+          if (entry.issue) continue;
+        }
+        entry.translated = withPadding(source, translations[index]);
         this.write(entry, entry.translated);
       }
       this.error = null;
