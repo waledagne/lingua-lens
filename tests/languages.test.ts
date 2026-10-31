@@ -62,3 +62,15 @@ test('milestone upgrade preserves manual defaults and validates per-site prefere
   assert.deepEqual(forSite(config, 'unrelated.example').pair, pair);
   assert.deepEqual(readSettings(storedSettings(config)), config);
 });
+
+test('reading-mode upgrade preserves languages, readiness, exclusions, and valid site overrides', () => {
+  const stored = { schemaVersion: 4, pair: { sourceLanguage: 'fr', targetLanguage: 'en' }, preparedPairs: ['fr:en'], detectorReady: true,
+    readingMode: 'bilingual', sitePreferences: { 'example.com': { never: true, readingMode: 'translated' }, 'bad.example': { readingMode: 'bad' } } };
+  const config = readSettings(stored);
+  assert.deepEqual(config.pair, stored.pair); assert.equal(config.ready, true);
+  assert.equal(forSite(config, 'example.com').readingMode, 'translated'); assert.equal(config.sitePreferences?.['example.com'].never, true);
+  assert.equal(forSite(config, 'other.example').readingMode, 'bilingual');
+  assert.equal(config.sitePreferences?.['bad.example'], undefined);
+  assert.equal(readSettings({ readingMode: 'bad' }).readingMode, 'translated');
+  assert.deepEqual(readSettings(storedSettings(config)), config);
+});

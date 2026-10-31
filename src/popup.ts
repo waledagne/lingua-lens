@@ -1,4 +1,4 @@
-import { errorMessage, languageName, pairLabel, request, siteOrigins, type LanguagePair, type Settings, type TabState } from './shared';
+import { errorMessage, languageName, pairLabel, request, siteOrigins, type LanguagePair, type ReadingMode, type Settings, type TabState } from './shared';
 import { LanguageControls } from './language-controls';
 
 const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -8,6 +8,9 @@ const setup = get<HTMLButtonElement>('setup');
 const scope = get<HTMLSelectElement>('language-scope');
 const never = get<HTMLInputElement>('never');
 const selection = get<HTMLButtonElement>('translate-selection');
+const reading = get<HTMLSelectElement>('reading-mode');
+const reveal = get<HTMLButtonElement>('reveal-original');
+let pendingReading: ReadingMode | null = null;
 let scopeChosen = false;
 function editingPair(state: TabState): LanguagePair { return scope.value === 'global' ? state.defaultPair ?? state.pair : state.pair; }
 let tab: chrome.tabs.Tab | undefined;
@@ -24,7 +27,11 @@ const controls = new LanguageControls(() => {
 });
 function render(state: TabState): void {
   current = state;
-  if (!scopeChosen) scope.value = state.sitePreference?.pair ? 'site' : 'global';
+  if (!scopeChosen) scope.value = state.sitePreference?.pair || state.sitePreference?.readingMode ? 'site' : 'global';
+  reading.value = pendingReading ?? (scope.value === 'global' ? state.defaultReadingMode ?? state.readingMode ?? 'translated' : state.readingMode ?? 'translated');
+  reading.disabled = busy || dirty;
+  get('reading-hint').textContent = scope.value === 'global' && state.sitePreference?.readingMode ? 'This site keeps its own reading mode. Reset its settings to use the default.' :
+    reading.value === 'bilingual' ? 'Paragraphs keep their original text and links. UI controls translate in place.' : 'Text translates in place. Select translated text to reveal its original.';
   scope.disabled = busy;
   (scope.querySelector('option[value="site"]') as HTMLOptionElement).disabled = !state.site;
   if (!dirty) controls.set(editingPair(state));
@@ -60,6 +67,7 @@ function render(state: TabState): void {
   toggle.hidden = !state.ready;
   toggle.disabled = busy || dirty || !state.site || blocked;
   selection.disabled = busy || dirty || !state.site || blocked;
+  reveal.disabled = busy || dirty || !state.site || blocked || !running;
   toggle.textContent = pageError ? 'Retry translation' : running ? 'Pause & restore original' : 'Translate this page';
   setup.hidden = state.ready && !pageError;
   setup.disabled = busy || dirty;
@@ -67,7 +75,7 @@ function render(state: TabState): void {
   auto.checked = pendingAuto ?? state.autoSites.includes(state.site);
   auto.disabled = busy || dirty || !state.site || !state.ready || blocked;
   never.checked = blocked; never.disabled = busy || dirty || !state.site;
-  get('reset-site-languages').hidden = !state.sitePreference?.pair;
+  get('reset-site-languages').hidden = !state.sitePreference?.pair && !state.sitePreference?.readingMode;
   (get('reset-site-languages') as HTMLButtonElement).disabled = busy || dirty;
 }
 scope.addEventListener('change', () => { scopeChosen = true; dirty = false; if (current) render(current); });
@@ -100,7 +108,7 @@ never.addEventListener('change', async () => {
 get('reset-site-languages').addEventListener('click', async () => {
   if (busy || dirty || tab?.id === undefined || !current) return;
   busy = true; actionError = null; render(current);
-  try { await request({ target: 'background', type: 'site-preference', tabId: tab.id, resetPair: true }); scope.value = 'global'; }
+  try { await request({ target: 'background', type: 'site-preference', tabId: tab.id, resetPair: true, resetReadingMode: true }); scope.value = 'global'; }
   catch (error) { actionError = errorMessage(error); }
   finally { busy = false; await refresh(); }
 });
@@ -108,6 +116,20 @@ selection.addEventListener('click', async () => {
   if (tab?.id === undefined || busy || dirty || !current) return;
   busy = true; actionError = null; render(current);
   try { await request({ target: 'background', type: 'selection', tabId: tab.id }); }
+  catch (error) { actionError = errorMessage(error); }
+  finally { busy = false; await refresh(); }
+});
+reading.addEventListener('change', async () => {
+  if (busy || dirty || !current) return;
+  pendingReading = reading.value as ReadingMode; busy = true; actionError = null; render(current);
+  try { await request({ target: 'background', type: 'reading-mode', mode: pendingReading, tabId: scope.value === 'site' ? tab?.id : undefined }); }
+  catch (error) { actionError = errorMessage(error); }
+  finally { pendingReading = null; busy = false; await refresh(); }
+});
+reveal.addEventListener('click', async () => {
+  if (tab?.id === undefined || busy || dirty || !current) return;
+  busy = true; actionError = null; render(current);
+  try { await request({ target: 'background', type: 'reveal-original', tabId: tab.id }); }
   catch (error) { actionError = errorMessage(error); }
   finally { busy = false; await refresh(); }
 });

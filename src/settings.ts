@@ -1,11 +1,11 @@
 import { DEFAULT_PAIR, LANGUAGES, pairKey, parsePair, type Settings, type SitePreference } from './shared';
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
 function validSite(site: string): boolean {
   try { return new URL(`https://${site}`).hostname === site && !/[/*?#@\s]/u.test(site); } catch { return false; }
 }
 export function forSite(settings: Settings, site: string): Settings {
   const pair = settings.sitePreferences?.[site]?.pair ?? settings.pair;
-  return { ...settings, pair, ready: pair.sourceLanguage === 'auto' ? settings.detectorReady : settings.preparedPairs.includes(pairKey(pair)) };
+  return { ...settings, pair, readingMode: settings.sitePreferences?.[site]?.readingMode ?? settings.readingMode ?? 'translated', ready: pair.sourceLanguage === 'auto' ? settings.detectorReady : settings.preparedPairs.includes(pairKey(pair)) };
 }
 export function readSettings(stored: Record<string, unknown>): Settings {
   let pair = DEFAULT_PAIR;
@@ -28,14 +28,15 @@ export function readSettings(stored: Record<string, unknown>): Settings {
       const candidate = value as SitePreference, preference: SitePreference = {};
       try { if (candidate.pair) preference.pair = parsePair(candidate.pair); } catch { /* Ignore invalid overrides. */ }
       if (candidate.never === true) preference.never = true;
-      if (preference.pair || preference.never) sitePreferences[site] = preference;
+      if (candidate.readingMode === 'translated' || candidate.readingMode === 'bilingual') preference.readingMode = candidate.readingMode;
+      if (preference.pair || preference.never || preference.readingMode) sitePreferences[site] = preference;
     }
   }
   const understoodLanguages = Array.isArray(stored.understoodLanguages) ? [...new Set(stored.understoodLanguages.filter((code): code is string => LANGUAGES.some(([language]) => language === code)))] : [];
-  return { pair, preparedPairs, detectorReady, autoSites: autoSites.filter(site => !sitePreferences[site]?.never), sitePreferences, understoodLanguages,
+  return { pair, preparedPairs, detectorReady, autoSites: autoSites.filter(site => !sitePreferences[site]?.never), sitePreferences, understoodLanguages, readingMode: stored.readingMode === 'bilingual' ? 'bilingual' : 'translated',
     ready: pair.sourceLanguage === 'auto' ? detectorReady : preparedPairs.includes(pairKey(pair)) };
 }
 export function storedSettings(settings: Settings): Record<string, unknown> {
   return { schemaVersion: SETTINGS_VERSION, pair: settings.pair, preparedPairs: settings.preparedPairs, detectorReady: settings.detectorReady, autoSites: settings.autoSites,
-    sitePreferences: settings.sitePreferences ?? {}, understoodLanguages: settings.understoodLanguages ?? [] };
+    sitePreferences: settings.sitePreferences ?? {}, understoodLanguages: settings.understoodLanguages ?? [], readingMode: settings.readingMode ?? 'translated' };
 }

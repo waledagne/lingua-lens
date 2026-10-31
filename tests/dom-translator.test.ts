@@ -132,3 +132,125 @@ test('splits long descriptions without losing text or breaking emoji', () => {
   assert.equal(siteKey('https://www.allegro.pl/oferta/a'), 'www.allegro.pl');
   assert.equal(siteKey('https://allegro.pl.example.org/'), 'allegro.pl.example.org');
 });
+
+const paragraphResult = (element: Element): string | undefined => element.querySelector('[data-lingua-lens-translation]')?.shadowRoot?.querySelector('.text')?.textContent ?? undefined;
+
+test('bilingual paragraphs translate a complete sentence across inline markup and preserve original links', async t => {
+  const calls: string[][] = [];
+  const { document, controller } = fixture(t, '<p>To jest <strong>dobry</strong> <a href="#details">produkt</a>.</p>', async texts => { calls.push(texts); return texts.map(text => 'EN:' + text); });
+  const paragraph = document.querySelector('p')!, link = document.querySelector('a')!, strong = document.querySelector('strong')!;
+  const original = paragraph.innerHTML;
+  let clicks = 0; link.addEventListener('click', event => { event.preventDefault(); clicks++; });
+  controller.setReadingMode('bilingual', 'en'); controller.start();
+  await until(() => paragraphResult(paragraph) === 'EN:To jest dobry produkt.');
+  assert.deepEqual(calls, [['To jest dobry produkt.']]);
+  assert.equal(paragraph.textContent, 'To jest dobry produkt.');
+  assert.equal(document.querySelector('strong'), strong); assert.equal(document.querySelector('a'), link);
+  link.click(); assert.equal(clicks, 1);
+  controller.stop(); assert.equal(paragraph.innerHTML, original);
+});
+
+test('bilingual paragraphs handle inline edits, removed nodes, line breaks, and replacement nodes', async t => {
+  const { document, controller } = fixture(t, '<p>Witaj <strong>świecie</strong><br><em>Dzisiaj.</em></p>');
+  const paragraph = document.querySelector('p')!;
+  controller.setReadingMode('bilingual', 'en'); controller.start();
+  await until(() => paragraphResult(paragraph) === 'EN:Witaj świecie\nDzisiaj.');
+  paragraph.querySelector('strong')!.firstChild!.textContent = 'przyjacielu';
+  await until(() => paragraphResult(paragraph) === 'EN:Witaj przyjacielu\nDzisiaj.');
+  paragraph.querySelector('em')!.remove();
+  await until(() => paragraphResult(paragraph) === 'EN:Witaj przyjacielu');
+  paragraph.innerHTML = 'Nowy <strong>opis.</strong>';
+  await until(() => paragraphResult(paragraph) === 'EN:Nowy opis.');
+  assert.equal(paragraph.querySelectorAll('[data-lingua-lens-translation]').length, 1);
+  controller.stop(); assert.equal(paragraph.innerHTML, 'Nowy <strong>opis.</strong>');
+});
+
+test('changing reading modes restores source before translating and removes all bilingual output', async t => {
+  const { document, controller } = fixture(t, '<p>Dobry <em>produkt.</em></p><button>Otwórz</button>');
+  const paragraph = document.querySelector('p')!;
+  controller.start(); await until(() => paragraph.textContent === 'EN:Dobry EN:produkt.');
+  controller.setReadingMode('bilingual', 'en');
+  await until(() => paragraphResult(paragraph) === 'EN:Dobry produkt.');
+  assert.equal(paragraph.textContent, 'Dobry produkt.');
+  assert.equal(document.querySelector('button')!.textContent, 'EN:Otwórz');
+  controller.setReadingMode('translated', 'en');
+  await until(() => paragraph.textContent === 'EN:Dobry EN:produkt.');
+  assert.equal(paragraphResult(paragraph), undefined);
+  controller.stop(); assert.equal(paragraph.textContent, 'Dobry produkt.');
+});
+
+test('a paragraph response cannot overwrite newer source', async t => {
+  let finish!: (texts: string[]) => void, started = false;
+  const { document, controller } = fixture(t, '<p>Stary <em>opis.</em></p>', async texts => {
+    if (!started) { started = true; return new Promise(resolve => { finish = resolve; }); }
+    return texts.map(text => 'EN:' + text);
+  });
+  const paragraph = document.querySelector('p')!;
+  controller.setReadingMode('bilingual', 'en'); controller.start(); await until(() => started);
+  paragraph.firstChild!.textContent = 'Nowy ';
+  await sleep(10); finish(['Old result']);
+  await until(() => paragraphResult(paragraph) === 'EN:Nowy opis.');
+  assert.equal(document.body.textContent!.includes('Old result'), false);
+  controller.stop(); assert.equal(paragraph.textContent, 'Nowy opis.');
+});
+
+test('a pending paragraph result cannot survive a mode switch', async t => {
+  let finish!: (texts: string[]) => void, started = false;
+  const { document, controller } = fixture(t, '<p>Stary<em> opis.</em></p>', async texts => {
+    if (!started) { started = true; return new Promise(resolve => { finish = resolve; }); }
+    return texts.map(text => 'EN:' + text);
+  });
+  controller.setReadingMode('bilingual', 'en'); controller.start(); await until(() => started);
+  controller.setReadingMode('translated', 'en'); finish(['Stale paragraph']);
+  await until(() => document.querySelector('p')!.textContent === 'EN:Stary EN:opis.');
+  assert.equal(paragraphResult(document.querySelector('p')!), undefined);
+});
+
+test('grouping recovers from embedded controls without translating previous output again', async t => {
+  const { document, controller } = fixture(t, '<p>Dobry <em>produkt.</em><button>Otwórz</button></p>');
+  const paragraph = document.querySelector('p')!;
+  controller.setReadingMode('bilingual', 'en'); controller.start();
+  await until(() => paragraph.querySelector('em')!.textContent === 'EN:produkt.');
+  paragraph.querySelector('button')!.remove();
+  await until(() => paragraphResult(paragraph) === 'EN:Dobry produkt.');
+  assert.equal(paragraph.textContent, 'Dobry produkt.');
+  controller.stop(); assert.equal(paragraph.innerHTML, 'Dobry <em>produkt.</em>');
+});
+
+test('bilingual output handles protected regions, shadow roots, equal-target text, and literal HTML', async t => {
+  const { document, controller } = fixture(t, '<p translate="no">Marka</p><div contenteditable="true"><p>Sekret</p></div><div id="host"></div><p id="literal">Opis</p>', async texts => texts.map(text => text === 'To samo' ? text : '<img src=x>'));
+  const root = document.getElementById('host')!.attachShadow({ mode: 'open' }); root.innerHTML = '<p>Pomoc</p><p>To samo</p>';
+  controller.setReadingMode('bilingual', 'ar'); controller.start();
+  await until(() => paragraphResult(document.getElementById('literal')!) === '<img src=x>');
+  await until(() => paragraphResult(root.querySelector('p')!) === '<img src=x>');
+  assert.equal(root.querySelectorAll('[data-lingua-lens-translation]').length, 1);
+  const output = document.querySelector('[data-lingua-lens-translation]')!.shadowRoot!;
+  assert.equal(output.querySelector('img'), null); assert.equal(output.querySelector('.text')!.getAttribute('lang'), 'ar');
+  assert.equal(document.querySelector('[translate="no"]')!.textContent, 'Marka');
+  assert.equal(document.querySelector('[contenteditable]')!.textContent, 'Sekret');
+});
+
+test('bilingual output repairs removal, disappears on exclusion, and never queues its own text', async t => {
+  let calls = 0;
+  const { document, controller } = fixture(t, '<p>Witaj <em>świecie.</em></p>', async texts => { calls++; return texts.map(text => 'EN:' + text); });
+  const paragraph = document.querySelector('p')!;
+  controller.setReadingMode('bilingual'); controller.start();
+  await until(() => !!paragraphResult(paragraph));
+  const settled = calls; await sleep(40); assert.equal(calls, settled);
+  paragraph.querySelector('[data-lingua-lens-translation]')!.remove();
+  await until(() => !!paragraphResult(paragraph));
+  paragraph.setAttribute('translate', 'no');
+  await until(() => paragraphResult(paragraph) === undefined);
+  assert.equal(paragraph.textContent, 'Witaj świecie.');
+});
+
+test('reveal original uses saved text for selected translated items and ignores later website edits', async t => {
+  const { document, controller } = fixture(t, '<p>Dobry <strong>produkt.</strong></p>');
+  controller.start(); await until(() => document.querySelector('strong')!.textContent === 'EN:produkt.');
+  const range = document.createRange(); range.selectNodeContents(document.querySelector('strong')!);
+  const selection = document.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+  assert.deepEqual(controller.originalForSelection(), { original: 'produkt.', translated: 'EN:produkt.' });
+  document.querySelector('strong')!.firstChild!.textContent = 'Website changed this';
+  assert.equal(controller.originalForSelection(), null);
+  controller.stop(); assert.equal(controller.originalForSelection(), null);
+});

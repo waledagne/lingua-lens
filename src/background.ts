@@ -1,4 +1,4 @@
-import { errorMessage, isWebsite, LANGUAGES, MAX_BATCH, MAX_TEXT, originPattern, pairKey, pairLabel, parsePair, siteKey, siteOrigins, unwrap, type BackgroundRequest, type PageStatus, type SelectionView, type Settings, type TabState } from './shared';
+import { errorMessage, isWebsite, LANGUAGES, MAX_BATCH, MAX_TEXT, originPattern, pairKey, pairLabel, parsePair, siteKey, siteOrigins, unwrap, type BackgroundRequest, type OriginalPassage, type PageStatus, type SelectionView, type Settings, type TabState } from './shared';
 import { forSite, readSettings, storedSettings } from './settings';
 import { collectSourceContext } from './source-context';
 import { normalizeLanguage, validateContext } from './source-detector';
@@ -18,7 +18,7 @@ async function tabState(tabId: number, includeStatus = true): Promise<TabState> 
   let status: PageStatus | null = null;
   if (includeStatus) try { status = await chrome.tabs.sendMessage(tabId, { target: 'page', type: 'status' }, { frameId: 0 }); } catch { /* Not injected yet. */ }
   const effective = forSite(config, site), sitePreference = config.sitePreferences?.[site];
-  return { ...effective, defaultPair: config.pair, sitePreference, site, status,
+  return { ...effective, defaultPair: config.pair, defaultReadingMode: config.readingMode, sitePreference, site, status,
     enabled: !!site && !sitePreference?.never && effective.ready && (override ?? config.autoSites.includes(site)) };
 }
 async function reconcileSites(): Promise<void> {
@@ -90,7 +90,7 @@ function mutate<T>(operation: () => Promise<T>): Promise<T> {
   return task;
 }
 const selections = new Map<number, string>();
-async function translateSelection(tabId: number, frameId?: number): Promise<void> {
+async function translateSelection(tabId: number, frameId?: number, reveal = false): Promise<void> {
   const id = crypto.randomUUID();
   selections.set(tabId, id);
   const state = await tabState(tabId, false);
@@ -103,10 +103,18 @@ async function translateSelection(tabId: number, frameId?: number): Promise<void
   const capture = captures.find(item => item.result?.text && item.result.focused) ?? captures.find(item => item.result?.text) ?? captures[0];
   const text = capture?.result?.text ?? '', destination = { frameId: capture?.frameId ?? 0 };
   const view: SelectionView = { id, original: text.length <= MAX_TEXT ? text : '', label: pairLabel(state.pair) };
+  if (reveal) {
+    const passage = text && text.length <= MAX_TEXT ? await chrome.tabs.sendMessage(tabId, { target: 'page', type: 'original-selection' }, destination) as OriginalPassage | null : null;
+    view.original = passage?.original ?? '';
+    view.label = 'Original passage · includes surrounding text';
+    if (passage && typeof passage.original === 'string' && typeof passage.translated === 'string') view.result = passage.translated;
+    else view.error = 'Select translated page text to reveal its original. Pause restores all originals; text changed by the website has no saved translation.';
+  }
   if (selections.get(tabId) !== id) return;
   await chrome.tabs.sendMessage(tabId, { target: 'page', type: 'selection-close' }).catch(() => {});
   if (selections.get(tabId) !== id) return;
-  await chrome.tabs.sendMessage(tabId, { target: 'page', type: 'selection-view', view }, destination);
+  await chrome.tabs.sendMessage(tabId, { target: 'page', type: 'selection-view', view: { ...view, result: undefined, error: undefined } }, destination);
+  if (reveal) { await chrome.tabs.sendMessage(tabId, { target: 'page', type: 'selection-view', view }, destination); return; }
   try {
     if (state.sitePreference?.never) throw new Error('Turn off Never translate this site in the toolbar before translating.');
     if (!text) throw new Error('Select some text on the page first. Text inside editing fields is excluded.');
@@ -182,11 +190,23 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
     await refreshTabs();
     return message.tabId === undefined ? settings() : tabState(message.tabId);
   });
+  if (message.type === 'reading-mode') return mutate(async () => {
+    if (message.mode !== 'translated' && message.mode !== 'bilingual') throw new Error('Choose a supported reading mode.');
+    if (message.tabId === undefined) await chrome.storage.local.set({ readingMode: message.mode });
+    else {
+      const state = await tabState(message.tabId, false);
+      if (!state.site) throw new Error('Open a website to save its reading mode.');
+      await chrome.storage.local.set({ sitePreferences: { ...state.sitePreferences, [state.site]: { ...state.sitePreference, readingMode: message.mode } } });
+    }
+    await refreshTabs();
+    return message.tabId === undefined ? settings() : tabState(message.tabId);
+  });
   if (message.type === 'site-preference') return mutate(async () => {
     const state = await tabState(message.tabId, false);
     if (!state.site) throw new Error('Open a website to change its preferences.');
     const preference = { ...state.sitePreference };
     if (message.resetPair) delete preference.pair;
+    if (message.resetReadingMode) delete preference.readingMode;
     if (message.never !== undefined) preference.never = message.never;
     await chrome.storage.local.set({ sitePreferences: { ...state.sitePreferences, [state.site]: preference },
       autoSites: preference.never ? state.autoSites.filter(site => site !== state.site) : state.autoSites });
@@ -202,6 +222,7 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
     return settings();
   });
   if (message.type === 'selection') { await translateSelection(message.tabId); return null; }
+  if (message.type === 'reveal-original') { await translateSelection(message.tabId, undefined, true); return null; }
   if (message.type === 'ready') return mutate(async () => {
     const pair = parsePair(message.pair);
     const config = await settings();
@@ -262,11 +283,13 @@ chrome.runtime.onInstalled.addListener(details => {
     await initialize();
     await chrome.contextMenus.removeAll();
     chrome.contextMenus.create({ id: 'translate-selection', title: 'Translate selection with Lingua Lens', contexts: ['selection'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
+    chrome.contextMenus.create({ id: 'reveal-original', title: 'Reveal original with Lingua Lens', contexts: ['selection'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
     if (details.reason === 'install') await openSetup();
   })().catch(error => console.warn('Lingua Lens initialization:', errorMessage(error)));
 });
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'translate-selection' && tab?.id !== undefined) void initialize().then(() => translateSelection(tab.id!, info.frameId)).catch(error => openSetup(tab.id, errorMessage(error)));
+  if (info.menuItemId === 'reveal-original' && tab?.id !== undefined) void initialize().then(() => translateSelection(tab.id!, info.frameId, true)).catch(error => openSetup(tab.id, errorMessage(error)));
 });
 chrome.commands.onCommand.addListener((command, suppliedTab) => {
   void (async () => {
@@ -274,6 +297,7 @@ chrome.commands.onCommand.addListener((command, suppliedTab) => {
     const tab = suppliedTab ?? (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
     if (tab?.id === undefined || !isWebsite(tab.url ?? '')) return;
     if (command === 'translate-selection') await translateSelection(tab.id);
+    else if (command === 'reveal-original') await translateSelection(tab.id, undefined, true);
     else if (command === 'toggle-page') {
       const state = await tabState(tab.id);
       if (!state.ready) { await openSetup(tab.id); return; }

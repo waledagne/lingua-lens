@@ -33,15 +33,20 @@ async function ui(t: TestContext, name: 'popup' | 'setup', website = true, optio
         if (message.type === 'site-preference') {
           const preference = config.sitePreferences!['www.example.com'];
           if (message.resetPair) delete preference.pair;
+          if (message.resetReadingMode) delete preference.readingMode;
           if (message.never !== undefined) preference.never = message.never;
           if (message.never) config.autoSites = [];
+        }
+        if (message.type === 'reading-mode') {
+          if (message.tabId === undefined) config.readingMode = message.mode;
+          else config.sitePreferences = { ...config.sitePreferences, 'www.example.com': { ...config.sitePreferences?.['www.example.com'], readingMode: message.mode } };
         }
         if (message.type === 'understood-languages') config.understoodLanguages = message.languages;
         if (message.type === 'auto') config = { ...config, autoSites: message.enabled ? ['www.example.com'] : [] };
         if (message.type === 'ready') { config = { ...config, detectorReady: config.detectorReady || message.pair.sourceLanguage === 'auto', ready: true, preparedPairs: [...config.preparedPairs, message.pair.sourceLanguage === 'auto' ? (message.detectedSource ?? '') + ':' + message.pair.targetLanguage : pairKey(message.pair)] }; }
         if (message.type === 'source-context') return { ok: true, data: options.context };
         const effectivePair = config.sitePreferences?.['www.example.com']?.pair ?? config.pair;
-        const state: TabState = { ...config, defaultPair: config.pair, pair: effectivePair, ready: effectivePair.sourceLanguage === 'auto' ? config.detectorReady : config.preparedPairs.includes(pairKey(effectivePair)), sitePreference: config.sitePreferences?.['www.example.com'], site: website ? 'www.example.com' : '', status: options.pageStatus ?? null, enabled: options.pageStatus?.enabled ?? false };
+        const state: TabState = { ...config, defaultPair: config.pair, defaultReadingMode: config.readingMode ?? 'translated', readingMode: config.sitePreferences?.['www.example.com']?.readingMode ?? config.readingMode ?? 'translated', pair: effectivePair, ready: effectivePair.sourceLanguage === 'auto' ? config.detectorReady : config.preparedPairs.includes(pairKey(effectivePair)), sitePreference: config.sitePreferences?.['www.example.com'], site: website ? 'www.example.com' : '', status: options.pageStatus ?? null, enabled: options.pageStatus?.enabled ?? false };
         return { ok: true, data: 'tabId' in message && message.tabId !== undefined ? state : config };
       },
     },
@@ -244,4 +249,27 @@ test('a stalled model download can be cancelled without saving readiness and set
   assert.equal(button('cancel-setup').hidden, true);
   assert.equal(messages.some(message => message.type === 'ready'), false);
   assert.equal((document.getElementById('source-language') as HTMLSelectElement).disabled, false);
+});
+
+test('reading modes save to the chosen scope and site reset restores inherited settings', async t => {
+  const { document, select, button, messages } = await ui(t, 'popup', true, { detectorReady: true });
+  const mode = document.getElementById('reading-mode') as HTMLSelectElement;
+  select('language-scope', 'site'); select('reading-mode', 'bilingual');
+  assert.equal(mode.value, 'bilingual'); assert.equal(mode.disabled, true);
+  await until(() => !mode.disabled);
+  assert.ok(messages.some(message => message.type === 'reading-mode' && message.tabId === 1 && message.mode === 'bilingual'));
+  select('language-scope', 'global'); assert.equal(mode.value, 'translated');
+  select('language-scope', 'site'); assert.equal(mode.value, 'bilingual');
+  assert.equal(button('reset-site-languages').hidden, false);
+  button('reset-site-languages').click();
+  await until(() => !mode.disabled && !!button('reset-site-languages').hidden);
+  assert.equal(mode.value, 'translated');
+});
+
+test('reveal original is available on a running page and routes independently of translation', async t => {
+  const { button, messages } = await ui(t, 'popup', true, { detectorReady: true, pageStatus: { enabled: true, translated: 1, pending: 0, error: null } });
+  assert.equal(button('reveal-original').disabled, false);
+  button('reveal-original').click();
+  await until(() => messages.some(message => message.type === 'reveal-original') && !button('reveal-original').disabled);
+  assert.equal(messages.some(message => message.type === 'selection'), false);
 });

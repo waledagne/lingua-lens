@@ -92,3 +92,16 @@ test('actual content script discards an old pair response that arrives after swi
   await until(() => document.querySelector('p')!.textContent === 'ja:en:Witaj');
   assert.equal(document.body.textContent!.includes('Old pair output'), false);
 });
+
+test('content script applies reading modes and restores sources before switching back', async t => {
+  const { document, config, refresh } = await content(t, async texts => texts.map(text => 'English:' + text));
+  await until(() => document.querySelector('p')!.textContent === 'English:Witaj');
+  config.readingMode = 'bilingual'; await refresh();
+  await until(() => !!document.querySelector('[data-lingua-lens-translation]'));
+  assert.equal(document.querySelector('p')!.textContent, 'Witaj');
+  const root = document.querySelector('[data-lingua-lens-translation]')!.shadowRoot!;
+  assert.equal(root.querySelector('.text')!.textContent, 'English:Witaj');
+  config.readingMode = 'translated'; await refresh();
+  await until(() => document.querySelector('p')!.textContent === 'English:Witaj');
+  assert.equal(document.querySelector('[data-lingua-lens-translation]'), null);
+});

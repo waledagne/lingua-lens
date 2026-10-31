@@ -5,10 +5,12 @@ export const MAX_BATCH = 32;
 
 export type Reply<T> = { ok: true; data: T } | { ok: false; error: string };
 export interface SourceContext { sample: string; pageLanguage: string }
-export interface SitePreference { pair?: LanguagePair; never?: boolean }
-export interface Settings { pair: LanguagePair; preparedPairs: string[]; detectorReady: boolean; ready: boolean; autoSites: string[]; sitePreferences?: Record<string, SitePreference>; understoodLanguages?: string[] }
+export type ReadingMode = 'translated' | 'bilingual';
+export interface OriginalPassage { original: string; translated: string }
+export interface SitePreference { pair?: LanguagePair; never?: boolean; readingMode?: ReadingMode }
+export interface Settings { pair: LanguagePair; preparedPairs: string[]; detectorReady: boolean; ready: boolean; autoSites: string[]; sitePreferences?: Record<string, SitePreference>; understoodLanguages?: string[]; readingMode?: ReadingMode }
 export interface PageStatus { enabled: boolean; translated: number; pending: number; error: string | null; detectedSource?: string | null }
-export interface TabState extends Settings { enabled: boolean; site: string; status: PageStatus | null; defaultPair?: LanguagePair; sitePreference?: SitePreference }
+export interface TabState extends Settings { enabled: boolean; site: string; status: PageStatus | null; defaultPair?: LanguagePair; defaultReadingMode?: ReadingMode; sitePreference?: SitePreference }
 export interface SelectionView { id: string; original: string; label: string; result?: string; error?: string }
 export type BackgroundRequest =
   | { target: 'background'; type: 'state'; tabId?: number }
@@ -16,14 +18,16 @@ export type BackgroundRequest =
   | { target: 'background'; type: 'detect'; context: SourceContext; pair: LanguagePair }
   | { target: 'background'; type: 'source-context'; tabId: number }
   | { target: 'background'; type: 'languages'; pair: LanguagePair; tabId?: number }
-  | { target: 'background'; type: 'site-preference'; tabId: number; never?: boolean; resetPair?: boolean }
+  | { target: 'background'; type: 'site-preference'; tabId: number; never?: boolean; resetPair?: boolean; resetReadingMode?: boolean }
+  | { target: 'background'; type: 'reading-mode'; mode: ReadingMode; tabId?: number }
   | { target: 'background'; type: 'understood-languages'; languages: string[] }
   | { target: 'background'; type: 'selection'; tabId: number }
+  | { target: 'background'; type: 'reveal-original'; tabId: number }
   | { target: 'background'; type: 'open-setup' }
   | { target: 'background'; type: 'toggle'; tabId: number; enabled: boolean }
   | { target: 'background'; type: 'auto'; tabId: number; enabled: boolean }
   | { target: 'background'; type: 'ready'; pair: LanguagePair; detectedSource?: string; tabId?: number };
-export type PageRequest = { target: 'page'; type: 'status' | 'refresh' | 'selection-close' } | { target: 'page'; type: 'selection-view'; view: SelectionView };
+export type PageRequest = { target: 'page'; type: 'status' | 'refresh' | 'selection-close' | 'original-selection' } | { target: 'page'; type: 'selection-view'; view: SelectionView };
 
 export function siteKey(url: string): string {
   return new URL(url).hostname;

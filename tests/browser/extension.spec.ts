@@ -96,6 +96,7 @@ test('language selection restores originals, prepares the chosen pair, and avoid
   await command('toggle', false);
   const popup = await context.newPage(); await shop.bringToFront();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await popup.locator('#preferences > summary').click();
   await popup.getByLabel('Source language', { exact: true }).selectOption('fr');
   await popup.getByLabel('Target language', { exact: true }).selectOption('de');
   await popup.getByRole('button', { name: 'Apply languages' }).click();
@@ -195,7 +196,8 @@ test('website language overrides survive defaults and navigation; exclusion rest
   const custom = { sourceLanguage: 'pl', targetLanguage: 'fr' };
   const popup = await context.newPage(); await shop.bringToFront();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
-  await popup.getByLabel('Save languages for').selectOption('site');
+  await popup.locator('#preferences > summary').click();
+  await popup.getByLabel('Save preferences for').selectOption('site');
   await popup.getByLabel('Source language', { exact: true }).selectOption('pl');
   await popup.getByLabel('Target language', { exact: true }).selectOption('fr');
   await popup.getByRole('button', { name: 'Apply languages' }).click();
@@ -221,7 +223,7 @@ test('website language overrides survive defaults and navigation; exclusion rest
   expect(await worker.evaluate(() => chrome.scripting.getRegisteredContentScripts())).toEqual([]);
   await popup.locator('#never').uncheck();
   await expect(popup.locator('#toggle')).toBeEnabled();
-  await popup.getByRole('button', { name: 'Use default languages on this site' }).click();
+  await popup.getByRole('button', { name: 'Use default settings on this site' }).click();
   await expect(popup.getByLabel('Target language', { exact: true })).toHaveValue('pl');
   await second.close(); await siteSetup.close(); await popup.close();
 });
@@ -286,4 +288,67 @@ test('understood languages keep page originals while explicit selections can sti
   const shortcuts = await worker.evaluate(() => chrome.commands.getAll());
   expect(shortcuts.find(command => command.name === 'translate-selection')?.shortcut).toBe('Alt+Shift+Y');
   expect(shortcuts.find(command => command.name === 'toggle-page')?.shortcut).toBe('Alt+Shift+L');
+});
+
+test('bilingual mode groups inline paragraphs, preserves links, updates live content, and persists per site', async () => {
+  await command('toggle', true);
+  const popup = await context.newPage(); await shop.bringToFront();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await popup.locator('#preferences > summary').click();
+  await popup.getByLabel('Save preferences for').selectOption('site');
+  await popup.getByLabel('Reading mode', { exact: true }).selectOption('bilingual');
+  await expect(popup.getByLabel('Reading mode', { exact: true })).toBeEnabled();
+  await expect.poll(() => shop.locator('h1').evaluate(element => element.textContent)).toBe('Witaj w sklepie');
+  await expect(shop.locator('h1 [data-lingua-lens-translation] .text')).toHaveText('Welcome to the shop');
+  await expect(shop.frameLocator('iframe').locator('p [data-lingua-lens-translation] .text')).toHaveText('Frame content');
+  await shop.evaluate(() => {
+    const paragraph = document.createElement('p'); paragraph.id = 'reading-example';
+    paragraph.innerHTML = 'To jest <strong>dobry</strong> <a href="#details">produkt</a>.';
+    document.body.append(paragraph);
+    paragraph.querySelector('a')!.addEventListener('click', event => { event.preventDefault(); paragraph.dataset.clicked = 'yes'; });
+  });
+  const paragraph = shop.locator('#reading-example');
+  await expect(paragraph.locator('[data-lingua-lens-translation] .text')).toHaveText('English: To jest dobry produkt.');
+  expect(await paragraph.evaluate(element => element.textContent)).toBe('To jest dobry produkt.');
+  await paragraph.getByRole('link', { name: 'produkt', exact: true }).click();
+  await expect(paragraph).toHaveAttribute('data-clicked', 'yes');
+  await shop.evaluate(() => { document.querySelector('#reading-example strong')!.firstChild!.textContent = 'świetny'; });
+  await expect(paragraph.locator('[data-lingua-lens-translation] .text')).toHaveText('English: To jest świetny produkt.');
+  await shop.locator('#open').click();
+  await expect(shop.locator('dialog p [data-lingua-lens-translation] .text')).toHaveText('Delivery tomorrow');
+  await shop.locator('#close').click();
+  await shop.screenshot({ path: 'work/bilingual-preview.png', fullPage: true });
+  const state = await control.evaluate(message => chrome.runtime.sendMessage(message), { target: 'background', type: 'state', tabId });
+  expect(state.data.readingMode).toBe('bilingual'); expect(state.data.defaultReadingMode).toBe('translated');
+  await popup.locator('#auto').check();
+  await expect(popup.locator('#auto')).toBeEnabled();
+  await shop.reload();
+  await expect(shop.locator('h1 [data-lingua-lens-translation] .text')).toHaveText('Welcome to the shop');
+  await popup.getByRole('button', { name: 'Use default settings on this site' }).click();
+  await expect(shop.locator('h1')).toHaveText('Welcome to the shop');
+  await expect(shop.locator('[data-lingua-lens-translation]')).toHaveCount(0);
+  await popup.close();
+});
+
+test('original reveal shows source text for page and frame selections without replacing the live translation', async () => {
+  await command('toggle', true);
+  const popup = await context.newPage(); await shop.bringToFront();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await shop.locator('h1').selectText();
+  await popup.getByRole('button', { name: 'Reveal original selection', exact: true }).click();
+  const panel = shop.getByRole('dialog', { name: 'Selected text translation', exact: true });
+  await expect(panel.getByText('Witaj w sklepie', { exact: true })).toBeVisible();
+  await expect(panel.locator('#selection-result')).toHaveText('Welcome to the shop');
+  await expect(shop.locator('h1')).toHaveText('Welcome to the shop');
+  await shop.getByRole('button', { name: 'Close translation' }).click();
+  await shop.evaluate(() => window.getSelection()?.removeAllRanges());
+  await shop.frameLocator('iframe').locator('p').selectText();
+  await popup.getByRole('button', { name: 'Reveal original selection', exact: true }).click();
+  const framePanel = shop.frameLocator('iframe').getByRole('dialog', { name: 'Selected text translation', exact: true });
+  await expect(framePanel.getByText('Treść ramki', { exact: true })).toBeVisible();
+  await expect(framePanel.locator('#selection-result')).toHaveText('Frame content');
+  await framePanel.getByRole('button', { name: 'Close translation' }).click();
+  const shortcuts = await worker.evaluate(() => chrome.commands.getAll());
+  expect(shortcuts.find(command => command.name === 'reveal-original')?.shortcut).toBe('Alt+Shift+O');
+  await popup.close();
 });

@@ -15,7 +15,7 @@ test('background migrates settings and manages languages and arbitrary websites'
   let menuClick!: (info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab) => void;
   let installed!: (details: chrome.runtime.InstalledDetails) => void;
   const views: SelectionView[] = [], opened: string[] = [];
-  let selectedText = 'Bonjour', selectionFrame = 0, menusCreated = 0;
+  let selectedText = 'Bonjour', selectionFrame = 0, menusCreated = 0, revealAvailable = true;
   let finishSelection: ((texts: string[]) => void) | undefined;
   const until = async (check: () => boolean) => { for (let i = 0; i < 200; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)); } assert.ok(check()); };
   let contexts = 0, refreshed = 0, engineRequests = 0;
@@ -42,7 +42,12 @@ test('background migrates settings and manages languages and arbitrary websites'
     tabs: {
       get: async (id: number) => tabs.get(id), query: async () => [...tabs.values()],
       create: async ({ url }: { url: string }) => { opened.push(url); },
-      sendMessage: async (_id: number, message: { type: string; view: SelectionView }) => { if (message.type === 'refresh') refreshed++; if (message.type === 'selection-view') views.push(structuredClone(message.view)); return null; },
+      sendMessage: async (_id: number, message: { type: string; view: SelectionView }) => {
+        if (message.type === 'refresh') refreshed++;
+        if (message.type === 'selection-view') views.push(structuredClone(message.view));
+        if (message.type === 'original-selection' && revealAvailable) return { original: 'Bonjour', translated: 'Hello' };
+        return null;
+      },
       onRemoved: event, onUpdated: { addListener(callback: typeof updated) { updated = callback; } },
     },
     scripting: {
@@ -66,7 +71,7 @@ test('background migrates settings and manages languages and arbitrary websites'
   }
   await t.test('migration preserves the old prepared pair but enables no site implicitly', async () => {
     const config = await send<Settings>({ target: 'background', type: 'state' });
-    assert.equal(config.ready, false); assert.equal(config.pair.sourceLanguage, 'auto'); assert.deepEqual(config.preparedPairs, ['pl:en']); assert.deepEqual(config.autoSites, []); assert.equal(local.schemaVersion, 4); assert.equal(scripts.size, 0);
+    assert.equal(config.ready, false); assert.equal(config.pair.sourceLanguage, 'auto'); assert.deepEqual(config.preparedPairs, ['pl:en']); assert.deepEqual(config.autoSites, []); assert.equal(local.schemaVersion, 5); assert.equal(scripts.size, 0);
     const manifest = JSON.parse(await readFile('public/manifest.json', 'utf8'));
     assert.equal(manifest.host_permissions, undefined); assert.equal(manifest.content_scripts, undefined);
   });
@@ -208,7 +213,7 @@ test('background migrates settings and manages languages and arbitrary websites'
   });
   await t.test('only first installation opens onboarding; updates preserve manual languages', async () => {
     installed({ reason: 'update' } as chrome.runtime.InstalledDetails);
-    await until(() => menusCreated === 1); assert.equal(opened.length, 0);
+    await until(() => menusCreated === 2); assert.equal(opened.length, 0);
     installed({ reason: 'install' } as chrome.runtime.InstalledDetails);
     await until(() => opened.length === 1);
     assert.equal(opened[0], 'chrome-extension://lens/setup.html');
@@ -223,5 +228,34 @@ test('background migrates settings and manages languages and arbitrary websites'
     await pending;
     assert.equal(views.at(-1)?.result, undefined);
     assert.match(views.at(-1)?.error ?? '', /settings changed/);
+  });
+  await t.test('reading-mode defaults and website overrides stay independent and reset safely', async () => {
+    await send({ target: 'background', type: 'reading-mode', mode: 'bilingual' });
+    assert.equal((await send<TabState>({ target: 'background', type: 'state', tabId: 1 })).readingMode, 'bilingual');
+    await send({ target: 'background', type: 'reading-mode', tabId: 1, mode: 'translated' });
+    const state = await send<TabState>({ target: 'background', type: 'state', tabId: 1 });
+    assert.equal(state.readingMode, 'translated'); assert.equal(state.defaultReadingMode, 'bilingual');
+    assert.equal((await send<TabState>({ target: 'background', type: 'state', tabId: 2 })).readingMode, 'bilingual');
+    await assert.rejects(send({ target: 'background', type: 'reading-mode', mode: 'bilingual' }, page), /extension controls/);
+    const reset = await send<TabState>({ target: 'background', type: 'site-preference', tabId: 1, resetReadingMode: true });
+    assert.equal(reset.readingMode, 'bilingual');
+  });
+  await t.test('original reveal reads stored page entries and never invokes a model, including menu and shortcut routing', async () => {
+    selectedText = 'Hello';
+    const before = engineRequests;
+    await send({ target: 'background', type: 'reveal-original', tabId: 1 });
+    assert.equal(views.at(-1)?.original, 'Bonjour'); assert.equal(views.at(-1)?.result, 'Hello');
+    assert.equal(engineRequests, before);
+    let count = views.length;
+    command('reveal-original', tabs.get(1) as chrome.tabs.Tab);
+    await until(() => views.length >= count + 2);
+    count = views.length;
+    menuClick({ menuItemId: 'reveal-original', frameId: 2 } as chrome.contextMenus.OnClickData, tabs.get(1) as chrome.tabs.Tab);
+    await until(() => views.length >= count + 2);
+    assert.equal(engineRequests, before);
+    revealAvailable = false;
+    await send({ target: 'background', type: 'reveal-original', tabId: 1 });
+    assert.match(views.at(-1)?.error ?? '', /Select translated page text/);
+    assert.equal(views.at(-1)?.result, undefined);
   });
 });

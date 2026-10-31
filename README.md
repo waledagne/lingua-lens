@@ -14,6 +14,16 @@ Built with **TypeScript** for desktop **Google Chrome**, using Chrome's local tr
 
 Detection and translation use Chrome's local models. Additional translation providers remain future work.
 
+## Version 0.5: bilingual reading and original passages
+
+Expand **Languages & reading** in the toolbar and choose **Bilingual paragraphs** from **Reading mode**. Complete reading blocks are translated across inline markup, so `A <strong>good</strong> product` is sent as one passage. The original block, formatting, and links stay in place; its plain-text translation appears underneath. Headings, paragraphs, simple list items, quotes, captions, and definition items can be grouped. Newly inserted blocks and changed or removed inline text update through the same observer.
+
+Reading mode can be saved as a default or for the current hostname using **Save preferences for**. **Use default settings on this site** removes both its language and reading-mode overrides. Changing modes restores originals and removes old bilingual output before rendering again. Pausing removes all extension-added translations while retaining website edits.
+
+**Translated only** keeps the existing text-node replacement behavior to preserve interactive controls. Bilingual mode also uses that behavior for UI labels, attributes, and complex blocks containing controls, nested reading blocks, protected regions, or more than 12,000 characters. Translations underneath paragraphs are plain text; original links remain clickable above them. Source and target matches, including understood-language passthrough, do not produce duplicate reading blocks.
+
+Select translated page text and use **Reveal original selection**, the right-click **Lingua Lens → Reveal original** action, or `Alt+Shift+O`. The panel compares the saved original passage with the current translation without another model request. It can include surrounding text because translation does not provide an exact source-to-target character mapping. It excludes editing fields and returns no saved original for text the website has since changed or for a paused page. The same action works in accessible frames.
+
 ## Version 0.4: everyday translation controls
 
 - **Guided setup:** first installation opens setup. Choose a target, prepare the local models, and run a real sample translation without needing a website. Compatibility errors offer a manual-source recovery path. Downloads have progress and cancellation; preparation can be retried.
@@ -27,7 +37,7 @@ The added `contextMenus` permission supplies the selection action. It does not a
 
 ## Using Lingua Lens
 
-The source defaults to **Auto-detect**. Choose your target language in the toolbar popup or setup page, then click **Apply languages**. In the popup, **Save languages for** selects the default for all websites or an override for the current hostname. Each page/frame detects its own source. A manual source choice is available for ambiguous or incorrectly identified pages.
+The source defaults to **Auto-detect**. Choose your target language in the toolbar popup or setup page, then click **Apply languages**. In the popup, **Save preferences for** selects the default for all websites or an override for the current hostname. Each page/frame detects its own source. A manual source choice is available for ambiguous or incorrectly identified pages.
 
 Use the toolbar on any ordinary HTTP(S) website that Chrome permits extensions to access. No website is enabled automatically by default, and there are no website-specific translation rules or required host permissions. **Always translate this site** requests access to the chosen hostname and enables automatic translation there.
 
@@ -49,14 +59,14 @@ The built extension is already in `dist/`.
 
 1. Open `chrome://extensions` in **Google Chrome 138 or newer**.
 2. Turn on **Developer mode**, choose **Load unpacked**, and select the project's `dist/` folder.
-3. Pin **Lingua Lens** and open its toolbar popup on a website. Leave **From** on **Auto-detect**, choose **To**, then click **Apply languages**.
+3. Pin **Lingua Lens** and open its toolbar popup on a website. Expand **Languages & reading**, leave **From** on **Auto-detect**, choose **To**, then click **Apply languages**.
 4. Click **Enable automatic detection** when prompted, or open **Languages & setup**. Setup opened from a website's popup can read that page's sample to determine the required source language.
 5. On the setup tab, enable the local detector. If the detected pair needs a pack, click **Download & enable translation** (or **Enable & test translation**) as a separate step. Chrome requires a user action for first-time model downloads; keep the setup tab open. You do not need to choose the detected source manually.
 6. Return to the website and choose **Translate this page** or **Retry translation**. The popup shows the detected source. Pages already in the target language keep their original text. Try opening a dialog or menu to check newly added content.
 7. Use **Always translate this site** to enable translation on future visits. Chrome will request access to that hostname when needed.
 8. Use **Pause & restore original** to restore source text. Pausing lasts until navigation; disable the site switch to stop future automatic translation.
 
-After updating an existing unpacked installation, reload the extension in `chrome://extensions` and refresh any pages that were already translated. Version 0.4 preserves existing version 0.3 language choices, prepared pairs, and permitted automatic sites. Older installations migrate to automatic detection while retaining the target and previous pack preparation. New website overrides, exclusions, and understood-language preferences start empty.
+After updating an existing unpacked installation, reload the extension in `chrome://extensions` and refresh any pages that were already translated. Version 0.5 preserves existing language choices, prepared pairs, permitted automatic sites, exclusions, and understood languages. Reading mode defaults to **Translated only** until changed. Older installations from before version 0.3 migrate to automatic detection while retaining the target and previous pack preparation.
 
 Chrome performs the first language-pack download. Availability depends on Chrome, its policies, your device, and the requested pair; setup reports failures instead of silently sending text to a server. No cloud fallback or API key is configured.
 
@@ -92,7 +102,7 @@ The latest corrected native availability check reported both Language Detector a
 
 The Windows runtime workaround follows the private-assembly requirement that manifests accompany their DLLs. [Microsoft assembly documentation](https://learn.microsoft.com/en-us/windows/win32/sbscs/assembly-manifests). The persistent, isolated Chromium launch follows [Playwright's extension-testing guidance](https://playwright.dev/docs/chrome-extensions).
 
-Validation covers TypeScript checking, the production build, 63 unit/integration tests, and 9 browser tests in Chrome for Testing 156.0.8078.4. Tests cover the actual UI/content scripts, detection confidence, target-language passthrough, migration, permission handling, caching, stale responses, runtime preparation, per-site language isolation, exclusion across tabs, selection and frame handling, copy, assigned commands, and cancelled setup. The browser suite exercises real extension APIs with deterministic models; event routing for keyboard and context-menu actions is also tested with mocks. Real native-model completion, translation/detection accuracy, Mac compatibility, and live commercial website flows remain release verification tasks.
+Validation covers TypeScript checking, the production build, 78 unit/integration tests, and 11 browser tests in Chrome for Testing 156.0.8078.4. Tests cover UI/content scripts, detection, migration, permissions, caching, stale responses, runtime preparation, per-site settings, exclusion across tabs, selection and frames, copy, assigned commands, and cancelled setup. Reading tests cover paragraph context across inline markup, line breaks, removed/replaced nodes, mode switches during pending requests, protected regions, shadow roots, restoration, and original reveal without a model request. The browser suite exercises real extension APIs with deterministic models; keyboard and context-menu event routing is also tested with mocks. Real native-model completion, accuracy, Mac compatibility, and live commercial website flows remain release verification tasks.
 
 ## Troubleshooting automatic translation
 
@@ -105,6 +115,7 @@ The fix requests separate `http://hostname/*` and `https://hostname/*` permissio
 | File | Responsibility |
 | --- | --- |
 | `src/dom-translator.ts` | Observe changes, discover open shadow roots, queue text, preserve originals, reject stale responses |
+| `src/paragraph.ts` | Identify reading blocks, snapshot inline text, and render isolated bilingual output |
 | `src/content.ts` | One controller per permitted document/frame; message bridge |
 | `src/background.ts` | Tab state, settings, optional site access, script registration, engine lifecycle |
 | `src/engine.ts` | Offscreen messaging and the sentence-segmentation worker |
@@ -146,14 +157,14 @@ Translation replaces text-node data and selected display attributes (`title`, `a
 - Images, canvas-drawn text, CSS-generated text, closed shadow roots, and native browser dialogs need other approaches (for example, an OCR feature).
 - Cross-origin frames require permission for their own origin. Permission for the main website does not automatically cover third-party widgets or embedded applications.
 - Open shadow roots inserted with a host are detected immediately. Roots attached later to existing hosts are discovered on interaction or within 2.5 seconds.
-- Each DOM text node is translated independently; sentences split by inline markup can lose context. Nodes above 12,000 characters are currently skipped. Short brands and mixed-language text can produce imperfect results.
+- Translated-only mode handles DOM text nodes independently; sentences split by inline markup can lose context. Bilingual mode groups eligible reading blocks across inline markup. Complex blocks fall back to text-node translation; individual nodes above 12,000 characters are skipped. Short brands and mixed-language text can produce imperfect results.
 - The popup counts the main frame's text items, not aggregated iframe totals. Pausing is a per-tab override until navigation; turn off the site switch to disable future automatic translation.
 - Websites that continuously rewrite their own UI can cause flicker or conflict with translated labels. Frameworks can depend on exact text-node content; test interactive flows before treating them as verified.
 
 ## Roadmap
 
 1. **Mixed-language detection:** improve sampling and detect independent language regions within a page.
-2. **Reading modes:** add bilingual paragraphs and reveal-original controls using better paragraph-level context.
+2. **Reading improvements:** refine block discovery on complex layouts and support more inline context while retaining working website controls.
 3. **Broader website validation:** test dialogs, navigation, forms, embedded frames, and dynamically updated content across different websites and web applications.
 4. **Translation quality:** group text split by inline markup and add optional user glossaries for names and recurring terms.
 5. **Additional capabilities:** evaluate OCR for image/canvas text and optional external translation providers where the local engine does not meet the user's needs.

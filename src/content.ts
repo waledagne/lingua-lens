@@ -10,6 +10,7 @@ if (!scope.__linguaLens) {
   let generation = 0;
   let detectedSource: string | null = null;
   let understoodKey = '';
+  let readingMode = 'translated';
   const selection = new SelectionPanel(document, () => request({ target: 'background', type: 'open-setup' }));
   const controller = new DomTranslator(document, async texts => {
     const snapshot = { ...pair }, version = generation;
@@ -29,7 +30,8 @@ if (!scope.__linguaLens) {
       const state = await request<TabState>({ target: 'background', type: 'state' });
       if (sequence !== configurationSequence) return;
       const nextUnderstood = JSON.stringify(state.understoodLanguages ?? []);
-      if (pairKey(pair) !== pairKey(state.pair) || nextUnderstood !== understoodKey) { controller.stop(); pair = state.pair; detectedSource = null; understoodKey = nextUnderstood; generation++; }
+      if (pairKey(pair) !== pairKey(state.pair) || nextUnderstood !== understoodKey || readingMode !== (state.readingMode ?? 'translated')) { controller.stop(); pair = state.pair; detectedSource = null; understoodKey = nextUnderstood; readingMode = state.readingMode ?? 'translated'; generation++; }
+      controller.setReadingMode(state.readingMode ?? 'translated', pair.targetLanguage);
       if (state.enabled) controller.start(); else { controller.stop(); generation++; }
     } catch { if (sequence === configurationSequence) { controller.stop(); generation++; } }
   };
@@ -37,6 +39,7 @@ if (!scope.__linguaLens) {
     if (sender.id !== chrome.runtime.id || message?.target !== 'page') return;
     if (message.type === 'selection-view') { selection.show(message.view); respond(true); return; }
     if (message.type === 'selection-close') { selection.close(); respond(true); return; }
+    if (message.type === 'original-selection') { respond(controller.originalForSelection()); return; }
     if (message.type === 'status') { respond(status()); return; }
     if (message.type === 'refresh') { void configure().then(() => respond(status())); return true; }
     respond(status());

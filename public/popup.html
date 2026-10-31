@@ -2,17 +2,9 @@
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lingua Lens</title><link rel="stylesheet" href="styles.css"></head>
 <body class="popup">
-  <header class="brand"><span class="mark" aria-hidden="true">文<span>→A</span></span><div><strong>Lingua Lens</strong><small>A little less lost in translation.</small></div><span class="version">0.4.0</span></header>
+  <header class="brand"><span class="mark" aria-hidden="true">文<span>→A</span></span><div><strong>Lingua Lens</strong><small>A little less lost in translation.</small></div><span class="version">0.5.0</span></header>
   <main>
     <div class="eyebrow">YOUR BROWSER, YOUR LANGUAGE</div>
-    <label class="scope-label">Save languages for<select id="language-scope"><option value="global">All websites (default)</option><option value="site">Only this website</option></select></label>
-    <div class="language-selectors">
-      <label>From<select id="source-language" aria-label="Source language" disabled></select></label>
-      <button id="swap-languages" class="swap-button" aria-label="Swap languages" disabled>⇄</button>
-      <label>To<select id="target-language" aria-label="Target language" disabled></select></label>
-    </div>
-    <button id="apply-languages" class="secondary apply-button" disabled>Apply languages</button>
-    <p id="language-hint" class="language-hint" role="status">Languages apply to all translated tabs.</p>
     <section class="site-card" aria-label="Current website">
       <div class="site-heading"><span class="status-dot" id="dot"></span><strong id="site">Checking this page…</strong><span id="badge" class="badge">Ready</span></div>
       <p id="summary" role="status" aria-live="polite">Finding your translation settings.</p>
@@ -20,11 +12,23 @@
     </section>
     <p id="error" class="error" role="alert" hidden></p>
     <button id="toggle" class="primary" disabled>Translate this page</button>
-    <button id="translate-selection" class="secondary" disabled>Translate selected text</button>
+    <div class="selection-actions"><button id="translate-selection" class="secondary" disabled>Translate selected text</button><button id="reveal-original" class="secondary" disabled>Reveal original selection</button></div>
     <button id="setup" class="secondary" hidden>Set up local translation</button>
     <label class="auto-row"><span><strong>Always translate this site</strong><small>Include new pages, menus, and dialogs.</small></span><input id="auto" type="checkbox" role="switch" disabled></label>
     <label class="never-row"><input id="never" type="checkbox" disabled> Never translate this site</label>
-    <button id="reset-site-languages" class="text-button reset-site" hidden>Use default languages on this site</button>
+    <details id="preferences" class="popup-preferences"><summary>Languages &amp; reading</summary><div class="preferences-body">
+      <label class="scope-label">Save preferences for<select id="language-scope"><option value="global">All websites (default)</option><option value="site">Only this website</option></select></label>
+      <div class="language-selectors">
+        <label>From<select id="source-language" aria-label="Source language" disabled></select></label>
+        <button id="swap-languages" class="swap-button" aria-label="Swap languages" disabled>⇄</button>
+        <label>To<select id="target-language" aria-label="Target language" disabled></select></label>
+      </div>
+      <button id="apply-languages" class="secondary apply-button" disabled>Apply languages</button>
+      <p id="language-hint" class="language-hint" role="status">Languages apply to all translated tabs.</p>
+      <label class="scope-label reading-mode-label">Reading mode<select id="reading-mode" aria-label="Reading mode" disabled><option value="translated">Translated only</option><option value="bilingual">Bilingual paragraphs</option></select></label>
+      <p id="reading-hint" class="language-hint">Keep original paragraphs with their translations underneath.</p>
+      <button id="reset-site-languages" class="text-button reset-site" hidden>Use default settings on this site</button>
+    </div></details>
     <p class="shortcut-hint">Select text → right-click → Lingua Lens. <button id="shortcuts" class="text-button">Keyboard shortcuts</button></p>
     <footer><span class="local-icon" aria-hidden="true">◉</span> Translated on your device <button id="settings" class="text-button">Languages &amp; setup</button></footer>
   </main>
