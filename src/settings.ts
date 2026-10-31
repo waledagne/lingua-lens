@@ -1,5 +1,5 @@
 import { DEFAULT_PAIR, LANGUAGES, pairKey, parsePair, type Settings, type SitePreference } from './shared';
-export const SETTINGS_VERSION = 5;
+export const SETTINGS_VERSION = 6;
 function validSite(site: string): boolean {
   try { return new URL(`https://${site}`).hostname === site && !/[/*?#@\s]/u.test(site); } catch { return false; }
 }
@@ -33,10 +33,12 @@ export function readSettings(stored: Record<string, unknown>): Settings {
     }
   }
   const understoodLanguages = Array.isArray(stored.understoodLanguages) ? [...new Set(stored.understoodLanguages.filter((code): code is string => LANGUAGES.some(([language]) => language === code)))] : [];
-  return { pair, preparedPairs, detectorReady, autoSites: autoSites.filter(site => !sitePreferences[site]?.never), sitePreferences, understoodLanguages, readingMode: stored.readingMode === 'bilingual' ? 'bilingual' : 'translated',
+  let panelPair: Settings['panelPair'];
+  try { if (stored.panelPair) panelPair = parsePair(stored.panelPair); } catch { /* Derive the panel target from current defaults until explicitly chosen. */ }
+  return { pair, panelPair, preparedPairs, detectorReady, autoSites: autoSites.filter(site => !sitePreferences[site]?.never), sitePreferences, understoodLanguages, readingMode: stored.readingMode === 'bilingual' ? 'bilingual' : 'translated',
     ready: pair.sourceLanguage === 'auto' ? detectorReady : preparedPairs.includes(pairKey(pair)) };
 }
 export function storedSettings(settings: Settings): Record<string, unknown> {
   return { schemaVersion: SETTINGS_VERSION, pair: settings.pair, preparedPairs: settings.preparedPairs, detectorReady: settings.detectorReady, autoSites: settings.autoSites,
-    sitePreferences: settings.sitePreferences ?? {}, understoodLanguages: settings.understoodLanguages ?? [], readingMode: settings.readingMode ?? 'translated' };
+    sitePreferences: settings.sitePreferences ?? {}, understoodLanguages: settings.understoodLanguages ?? [], readingMode: settings.readingMode ?? 'translated', ...(settings.panelPair ? { panelPair: settings.panelPair } : {}) };
 }

@@ -20,6 +20,13 @@ let dirty = false;
 let actionError: string | null = null;
 let pendingAuto: boolean | null = null;
 let pendingNever: boolean | null = null;
+get('open-panel').addEventListener('click', () => {
+  if (tab?.windowId === undefined) return;
+  // Preserve the toolbar click gesture required by Chrome.
+  void chrome.sidePanel.open({ windowId: tab.windowId }).then(() => window.close()).catch(error => {
+    actionError = errorMessage(error); get('error').textContent = actionError; get('error').hidden = false;
+  });
+});
 const controls = new LanguageControls(() => {
   dirty = current ? controls.changed(editingPair(current)) : true;
   actionError = null;
@@ -183,6 +190,7 @@ get('settings').addEventListener('click', openSetup);
 void (async () => {
   try { [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); }
   catch (error) { actionError = errorMessage(error); }
+  get<HTMLButtonElement>('open-panel').disabled = tab?.windowId === undefined;
   await refresh();
   setInterval(() => { void refresh(); }, 1000);
 })();

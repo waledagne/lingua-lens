@@ -14,6 +14,18 @@ Built with **TypeScript** for desktop **Google Chrome**, using Chrome's local tr
 
 Detection and translation use Chrome's local models. Additional translation providers remain future work.
 
+## Version 0.7: translation workspace
+
+Open **Open translation panel** in the toolbar, or use `Alt+Shift+K` (Option+Shift+K on Mac, if assigned). Chrome's side panel stays beside your website as you switch tabs within the same window. The existing toolbar and in-page selection translator remain available.
+
+- **Paste and translate:** paste up to 12,000 characters, leave the source on Auto-detect, and choose a target. The panel saves its own language choices; it does not change website defaults or per-site preferences. Short pasted phrases without a reliable source hint require a manual source.
+- **Bring in selections:** right-click highlighted website text and choose **Send selection to side panel**, or select text on the page and click **Use page selection** in the panel. Imports require temporary access granted by a toolbar, shortcut, or context-menu invocation, or saved host access. Editing fields and excluded sites are not imported; you can paste text yourself. Cross-origin frames require their own access.
+- **Protect drafts:** an incoming selection appears as a preview when a draft already exists. **Use selection** replaces it only when clicked; **Dismiss** keeps your work. Importing never starts translation automatically.
+- **Prepare locally:** missing detector or translation models offer a separate enable/download click, with progress and cancellation. Unsupported pairs report an error. Text already in the target language keeps its original form.
+- **Work with results:** copy the translation, swap languages and translate back, clear the workspace, or cancel an operation. Editing text or languages cancels the old operation and prevents late results from replacing newer work.
+
+The added `sidePanel` permission provides the browser workspace. It adds no required host access. Pasted drafts and translations stay in panel memory and are cleared when its document closes; they are not sent through background translation messages or saved as history. A selection handoff stays briefly in background memory, is consumed once, and expires after one minute. Closing the browser window clears its pending handoff. Copy writes only when clicked. Chrome may download local models; the extension has no cloud translation provider.
+
 ## Version 0.6: mixed-language pages
 
 **Auto-detect** now resolves the source separately for each passage instead of fixing one source for an entire document. A page can contain Polish, French, and Spanish passages, each translated into your chosen target. Passages already in the target language, or in a language you understand, keep their originals. A manual source choice still explicitly applies one source to the page.
@@ -76,7 +88,7 @@ The built extension is already in `dist/`.
 7. Use **Always translate this site** to enable translation on future visits. Chrome will request access to that hostname when needed.
 8. Use **Pause & restore original** to restore source text. Pausing lasts until navigation; disable the site switch to stop future automatic translation.
 
-After updating an existing unpacked installation, reload the extension in `chrome://extensions` and refresh any pages that were already translated. Version 0.6 preserves existing language choices, reading modes, prepared pairs, permitted automatic sites, exclusions, and understood languages. Mixed-language detection is part of **Auto-detect** and needs no additional website permissions. Older installations from before version 0.3 migrate to automatic detection while retaining the target and previous pack preparation.
+After updating an existing unpacked installation, reload the extension in `chrome://extensions` and refresh any pages that were already translated. Version 0.7 preserves existing language choices, reading modes, prepared pairs, permitted automatic sites, exclusions, and understood languages. Open the panel from the toolbar to try the new workspace. It initially uses automatic detection and your default target until you choose panel languages. Older installations from before version 0.3 migrate to automatic detection while retaining the target and previous pack preparation.
 
 Chrome performs the first language-pack download. Availability depends on Chrome, its policies, your device, and the requested pair; setup reports failures instead of silently sending text to a server. No cloud fallback or API key is configured.
 
@@ -112,7 +124,7 @@ The latest corrected native availability check reported both Language Detector a
 
 The Windows runtime workaround follows the private-assembly requirement that manifests accompany their DLLs. [Microsoft assembly documentation](https://learn.microsoft.com/en-us/windows/win32/sbscs/assembly-manifests). The persistent, isolated Chromium launch follows [Playwright's extension-testing guidance](https://playwright.dev/docs/chrome-extensions).
 
-Validation covers TypeScript checking, the production build, 93 unit/integration tests, and 13 browser tests in Chrome for Testing 156.0.8078.4. Tests cover UI/content scripts, detection, migration, permissions, caching, stale responses, runtime preparation, per-site settings, exclusion across tabs, selection and frames, copy, assigned commands, and cancelled setup. Reading and mixed-language tests cover inline context, language boundaries, source-specific duplicate labels, missing-pack isolation and recovery, understood-language passthrough, live language/visibility changes, protected drafts, shadow roots, restoration, and original reveal without a model request. The browser suite exercises real extension APIs with deterministic models; keyboard and context-menu event routing is also tested with mocks. Real native-model completion, accuracy, Mac compatibility, and live commercial website flows remain release verification tasks.
+Validation covers TypeScript checking, the production build, 107 unit/integration tests, and 15 browser tests in Chrome for Testing 156.0.8078.4. Tests cover UI/content scripts, detection, migration, permissions, caching, stale responses, runtime preparation, per-site settings, exclusion across tabs, selection and frames, copy, assigned commands, and cancelled setup. Reading and mixed-language tests cover inline context, language boundaries, source-specific duplicate labels, missing-pack isolation and recovery, understood-language passthrough, live language/visibility changes, protected drafts, shadow roots, restoration, and original reveal without a model request. Panel tests cover staged user-gesture downloads, independent preferences, draft handoffs, cancellation, oversized input, copying, and narrow layouts. Browser coverage opens a real native side panel and captures and translates a page selection inside it. The browser suite exercises real extension APIs with deterministic models; keyboard and context-menu event routing is also tested with mocks. Real native-model completion, accuracy, Mac compatibility, and live commercial website flows remain release verification tasks.
 
 ## Troubleshooting automatic translation
 
@@ -156,6 +168,7 @@ Translation replaces text-node data and selected display attributes (`title`, `a
 - Disable the site switch to stop automatic translation and remove its registration. Chrome's site-access settings can revoke the granted permission; revoked sites are removed from automatic translation.
 - Page samples and translatable text pass only between extension components and Chrome's local models. Setup/selection detection samples are limited to 6,000 characters; automatic passage contexts are limited to 1,600 characters each. Context sampling excludes editing fields, protected regions, explicitly hidden content, and extension UI. Setup links can include a source-language code for pack preparation, but never page samples or selected passages. The extension includes no network translation requests, analytics, API keys, or remote scripts.
 - Preferences are saved in extension-local storage. Tab overrides use session storage; translated text is held only in a bounded in-memory cache.
+- The persistent side panel saves language preferences only. Drafts and results stay in its document memory. Its per-window incoming selection queue is held in background memory, never in storage or URLs. See the version 0.7 workspace section above.
 - Selected text is read only when you invoke a selection action. Its original and translation appear in the in-page panel and may enter the in-memory translation cache. Copy writes the translation to the clipboard only when clicked. Selected text is never placed in setup URLs or saved preferences.
 - Site access means all relevant text can be read, including hidden page UI. Do not enable automatic translation on sites where you do not want this behavior.
 
@@ -187,4 +200,5 @@ Translation replaces text-node data and selected display attributes (`title`, `a
 - [Chrome Language Detector API](https://developer.chrome.com/docs/ai/language-detection)
 - [Extension content scripts and frames](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts)
 - [Offscreen documents](https://developer.chrome.com/docs/extensions/reference/api/offscreen)
+- [Chrome side panels](https://developer.chrome.com/docs/extensions/reference/api/sidePanel)
 - [MutationObserver](https://developer.mozilla.org/en-US/docs/Web/API/MutationObserver)

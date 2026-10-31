@@ -1,0 +1,16 @@
+.translation-panel { width: auto; min-width: 240px; margin: 0; }
+.translation-panel main { padding: 18px; }
+.translation-panel .brand { padding: 18px; }
+.translation-panel .language-selectors { grid-template-columns: minmax(0, 1fr) 32px minmax(0, 1fr); }
+.translation-panel select { min-width: 0; width: 100%; }
+.panel-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+.text-label { font-weight: 650; }
+#input-text { box-sizing: border-box; width: 100%; resize: vertical; min-height: 145px; border: 1px solid #cbd5cc; border-radius: 10px; padding: 12px; font: inherit; line-height: 1.6; color: inherit; background: #fffefa; }
+#input-text:focus { outline: 2px solid #49846c; outline-offset: 2px; }
+#count, .privacy-note { color: #647067; font-size: 11px; }
+.privacy-note { line-height: 1.6; }
+.panel-result { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; background: #edf4ed; border-radius: 10px; padding: 14px; }
+.incoming { border: 1px solid #aac5b4; border-radius: 10px; padding: 12px; background: #edf4ed; }
+#incoming-preview { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 80px; overflow: auto; }
+.translation-panel footer { flex-wrap: wrap; margin-top: 18px; }
+.translation-panel .error, .translation-panel #status { overflow-wrap: anywhere; }

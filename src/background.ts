@@ -1,9 +1,10 @@
-import { errorMessage, isWebsite, LANGUAGES, MAX_BATCH, MAX_TEXT, originPattern, pairKey, pairLabel, parsePair, siteKey, siteOrigins, unwrap, type BackgroundRequest, type OriginalPassage, type PageStatus, type SelectionView, type Settings, type TabState } from './shared';
+import { errorMessage, isWebsite, LANGUAGES, MAX_BATCH, MAX_TEXT, originPattern, pairKey, pairLabel, parsePair, siteKey, siteOrigins, unwrap, type BackgroundRequest, type OriginalPassage, type PageStatus, type PanelSelection, type SelectionView, type Settings, type TabState } from './shared';
 import { forSite, readSettings, storedSettings } from './settings';
 import { collectSourceContext } from './source-context';
 import { normalizeLanguage, validateContext } from './source-detector';
 import { readSelection } from './selection';
 import { validatePassages } from './passage-engine';
+import { PanelInbox } from './panel-inbox';
 
 async function settings(): Promise<Settings> {
   return readSettings(await chrome.storage.local.get(null));
@@ -91,6 +92,48 @@ function mutate<T>(operation: () => Promise<T>): Promise<T> {
   return task;
 }
 const selections = new Map<number, string>();
+const panelInbox = new PanelInbox();
+async function capturePanelSelection(tabId: number, frameId?: number): Promise<PanelSelection> {
+  const state = await tabState(tabId, false);
+  if (!state.site) throw new Error('Open the toolbar on a website first to grant temporary access, or paste text into the panel. Chrome protects its settings and Web Store.');
+  if (state.sitePreference?.never) throw new Error('Turn off Never translate this site before importing its text, or paste text yourself.');
+  let captures: chrome.scripting.InjectionResult<ReturnType<typeof readSelection>>[];
+  try { captures = await chrome.scripting.executeScript({ target: frameId === undefined ? { tabId, allFrames: true } : { tabId, frameIds: [frameId] }, func: readSelection }); }
+  catch {
+    if (frameId !== undefined) throw new Error('Chrome has not granted access to this frame. Copy its text and paste it into the panel.');
+    try { captures = await chrome.scripting.executeScript({ target: { tabId }, func: readSelection }); }
+    catch { throw new Error('Open the toolbar on this website or use its right-click selection action to grant access. You can also paste text into the panel.'); }
+  }
+  const capture = captures.find(item => item.result?.text && item.result.focused) ?? captures.find(item => item.result?.text);
+  const text = capture?.result?.text ?? '';
+  if (!text) throw new Error('Select text on the website first. Editing fields are excluded; you can paste their text yourself.');
+  if (text.length > MAX_TEXT) throw new Error('Select a shorter passage (up to 12,000 characters).');
+  return { id: crypto.randomUUID(), text, pageLanguage: capture?.result?.pageLanguage ?? '', site: state.site };
+}
+async function verifyPanelWindow(windowId: number, sender: chrome.runtime.MessageSender): Promise<void> {
+  if (!Number.isInteger(windowId) || windowId < 0) throw new Error('Invalid panel window.');
+  if (sender.tab?.windowId !== undefined) {
+    if (sender.tab.windowId !== windowId) throw new Error('This selection belongs to another browser window.');
+    return;
+  }
+  // Native panel senders have no tab or documentId, and getContexts reports
+  // windowId -1. The exact extension URL is checked by handle(); this trusted
+  // panel supplies its containing window from chrome.windows.getCurrent().
+  await chrome.windows.get(windowId);
+}
+function sendSelectionToPanel(tab: chrome.tabs.Tab, frameId?: number): void {
+  if (tab.id === undefined || tab.windowId === undefined) return;
+  // Chrome requires open() to run directly in the user gesture, before any await.
+  const opened = chrome.sidePanel.open({ windowId: tab.windowId });
+  void (async () => {
+    await opened; await initialize();
+    let value: PanelSelection;
+    try { value = await capturePanelSelection(tab.id!, frameId); }
+    catch (error) { value = { id: crypto.randomUUID(), error: errorMessage(error) }; }
+    panelInbox.put(tab.windowId, value);
+    await chrome.runtime.sendMessage({ target: 'panel', type: 'selection-ready', windowId: tab.windowId }).catch(() => {});
+  })().catch(error => console.warn('Lingua Lens side panel:', errorMessage(error)));
+}
 async function translateSelection(tabId: number, frameId?: number, reveal = false): Promise<void> {
   const id = crypto.randomUUID();
   selections.set(tabId, id);
@@ -183,6 +226,29 @@ async function handle(message: BackgroundRequest, sender: chrome.runtime.Message
   }
   // Only extension controls may change settings. Content scripts receive configuration through messages.
   if (!sender.url?.startsWith(chrome.runtime.getURL(''))) throw new Error('Use the extension controls to change translation settings.');
+  if (message.type.startsWith('panel-')) {
+    if (sender.url.split(/[?#]/u)[0] !== chrome.runtime.getURL('sidepanel.html')) throw new Error('Use the translation side panel for this action.');
+    if (message.type === 'panel-inbox' || message.type === 'panel-capture') {
+      await verifyPanelWindow(message.windowId, sender);
+      if (message.type === 'panel-inbox') return panelInbox.take(message.windowId);
+      const [tab] = await chrome.tabs.query({ active: true, windowId: message.windowId });
+      if (tab?.id === undefined) throw new Error('Open a website to use its selection, or paste text into the panel.');
+      return capturePanelSelection(tab.id);
+    }
+    if (message.type === 'panel-languages') return mutate(async () => {
+      await chrome.storage.local.set({ panelPair: parsePair(message.pair) });
+      return settings();
+    });
+    if (message.type === 'panel-models-ready') return mutate(async () => {
+      const config = await settings();
+      const pair = message.pair ? parsePair(message.pair) : undefined;
+      if (pair?.sourceLanguage === 'auto') throw new Error('A prepared translation pack needs a concrete source language.');
+      await chrome.storage.local.set({ detectorReady: config.detectorReady || message.detector === true,
+        preparedPairs: pair ? [...new Set([...config.preparedPairs, pairKey(pair)])] : config.preparedPairs });
+      await refreshTabs();
+      return settings();
+    });
+  }
   if (message.type === 'source-context') {
     const tab = await chrome.tabs.get(message.tabId);
     originPattern(tab.url ?? '');
@@ -284,6 +350,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   return true;
 });
 chrome.tabs.onRemoved.addListener(tabId => { selections.delete(tabId); void chrome.storage.session.remove(`tab:${tabId}`); });
+chrome.windows.onRemoved.addListener(windowId => panelInbox.clear(windowId));
 chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === 'loading') void chrome.storage.session.remove(`tab:${tabId}`);
 });
@@ -293,14 +360,19 @@ chrome.runtime.onInstalled.addListener(details => {
     await chrome.contextMenus.removeAll();
     chrome.contextMenus.create({ id: 'translate-selection', title: 'Translate selection with Lingua Lens', contexts: ['selection'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
     chrome.contextMenus.create({ id: 'reveal-original', title: 'Reveal original with Lingua Lens', contexts: ['selection'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
+    chrome.contextMenus.create({ id: 'panel-selection', title: 'Send selection to side panel', contexts: ['selection'], documentUrlPatterns: ['http://*/*', 'https://*/*'] });
     if (details.reason === 'install') await openSetup();
   })().catch(error => console.warn('Lingua Lens initialization:', errorMessage(error)));
 });
 chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === 'panel-selection' && tab) { sendSelectionToPanel(tab, info.frameId); return; }
   if (info.menuItemId === 'translate-selection' && tab?.id !== undefined) void initialize().then(() => translateSelection(tab.id!, info.frameId)).catch(error => openSetup(tab.id, errorMessage(error)));
   if (info.menuItemId === 'reveal-original' && tab?.id !== undefined) void initialize().then(() => translateSelection(tab.id!, info.frameId, true)).catch(error => openSetup(tab.id, errorMessage(error)));
 });
 chrome.commands.onCommand.addListener((command, suppliedTab) => {
+  if (command === 'open-panel' && suppliedTab?.windowId !== undefined) {
+    void chrome.sidePanel.open({ windowId: suppliedTab.windowId }).catch(error => console.warn('Lingua Lens side panel:', errorMessage(error))); return;
+  }
   void (async () => {
     await initialize();
     const tab = suppliedTab ?? (await chrome.tabs.query({ active: true, currentWindow: true }))[0];

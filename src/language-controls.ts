@@ -1,16 +1,18 @@
 import { LANGUAGES, pairKey, parsePair, type LanguagePair } from './shared';
 
+export function fillLanguages(select: HTMLSelectElement, automatic = false): void {
+  if (automatic) { const option = document.createElement('option'); option.value = 'auto'; option.textContent = 'Auto-detect'; select.append(option); }
+  for (const [code, name] of LANGUAGES) { const option = document.createElement('option'); option.value = code; option.textContent = name; select.append(option); }
+}
+
 export class LanguageControls {
   readonly source = document.getElementById('source-language') as HTMLSelectElement;
   readonly target = document.getElementById('target-language') as HTMLSelectElement;
   readonly apply = document.getElementById('apply-languages') as HTMLButtonElement;
   private swap = document.getElementById('swap-languages') as HTMLButtonElement;
   constructor(onChange: () => void) {
-    const automatic = document.createElement('option'); automatic.value = 'auto'; automatic.textContent = 'Auto-detect'; this.source.append(automatic);
+    fillLanguages(this.source, true); fillLanguages(this.target);
     for (const select of [this.source, this.target]) {
-      for (const [code, name] of LANGUAGES) {
-        const option = document.createElement('option'); option.value = code; option.textContent = name; select.append(option);
-      }
       select.addEventListener('change', onChange);
     }
     this.swap.addEventListener('click', () => {

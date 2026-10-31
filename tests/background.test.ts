@@ -15,6 +15,7 @@ test('background migrates settings and manages languages and arbitrary websites'
   let menuClick!: (info: chrome.contextMenus.OnClickData, tab?: chrome.tabs.Tab) => void;
   let installed!: (details: chrome.runtime.InstalledDetails) => void;
   const views: SelectionView[] = [], opened: string[] = [];
+  const panelWindows: number[] = [];
   let selectedText = 'Bonjour', selectionFrame = 0, menusCreated = 0, revealAvailable = true;
   let finishSelection: ((texts: string[]) => void) | undefined;
   const until = async (check: () => boolean) => { for (let i = 0; i < 200; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 5)); } assert.ok(check()); };
@@ -29,12 +30,15 @@ test('background migrates settings and manages languages and arbitrary websites'
   const event = { addListener() {} };
   const mock = {
     storage: { local: area(local), session: area(session) },
+    windows: { onRemoved: event, get: async (id: number) => ({ id }) },
+    sidePanel: { open: async ({ windowId }: { windowId: number }) => { panelWindows.push(windowId); } },
     runtime: {
       id: 'lens', getURL: (path: string) => 'chrome-extension://lens/' + path,
       onMessage: { addListener(callback: typeof listener) { listener = callback; } },
-      onInstalled: { addListener(callback: typeof installed) { installed = callback; } }, onStartup: event, ContextType: { OFFSCREEN_DOCUMENT: 'OFFSCREEN_DOCUMENT' },
-      getContexts: async () => contexts ? [{}] : [],
+      onInstalled: { addListener(callback: typeof installed) { installed = callback; } }, onStartup: event, ContextType: { OFFSCREEN_DOCUMENT: 'OFFSCREEN_DOCUMENT', SIDE_PANEL: 'SIDE_PANEL' },
+      getContexts: async (filter?: { documentIds?: string[] }) => filter?.documentIds ? [{ contextType: 'SIDE_PANEL', windowId: -1 }] : contexts ? [{}] : [],
       sendMessage: async (message: { type: string; pair: Settings['pair']; texts: string[]; contexts?: SourceContext[]; understoodLanguages?: string[] }) => {
+        if (message.type === 'selection-ready') return;
         engineRequests++;
         if (message.type === 'translate-passages') {
           forwardedUnderstood = message.understoodLanguages ?? [];
@@ -76,7 +80,7 @@ test('background migrates settings and manages languages and arbitrary websites'
   }
   await t.test('migration preserves the old prepared pair but enables no site implicitly', async () => {
     const config = await send<Settings>({ target: 'background', type: 'state' });
-    assert.equal(config.ready, false); assert.equal(config.pair.sourceLanguage, 'auto'); assert.deepEqual(config.preparedPairs, ['pl:en']); assert.deepEqual(config.autoSites, []); assert.equal(local.schemaVersion, 5); assert.equal(scripts.size, 0);
+    assert.equal(config.ready, false); assert.equal(config.pair.sourceLanguage, 'auto'); assert.deepEqual(config.preparedPairs, ['pl:en']); assert.deepEqual(config.autoSites, []); assert.equal(local.schemaVersion, 6); assert.equal(scripts.size, 0);
     const manifest = JSON.parse(await readFile('public/manifest.json', 'utf8'));
     assert.equal(manifest.host_permissions, undefined); assert.equal(manifest.content_scripts, undefined);
   });
@@ -218,7 +222,7 @@ test('background migrates settings and manages languages and arbitrary websites'
   });
   await t.test('only first installation opens onboarding; updates preserve manual languages', async () => {
     installed({ reason: 'update' } as chrome.runtime.InstalledDetails);
-    await until(() => menusCreated === 2); assert.equal(opened.length, 0);
+    await until(() => menusCreated === 3); assert.equal(opened.length, 0);
     installed({ reason: 'install' } as chrome.runtime.InstalledDetails);
     await until(() => opened.length === 1);
     assert.equal(opened[0], 'chrome-extension://lens/setup.html');
@@ -279,5 +283,38 @@ test('background migrates settings and manages languages and arbitrary websites'
     await send({ target: 'background', type: 'languages', pair: { sourceLanguage: 'pl', targetLanguage: 'en' } });
     await send({ target: 'background', type: 'toggle', tabId: 1, enabled: true });
     await assert.rejects(send(request, page), /settings changed/);
+  });
+  const panel = { id: 'lens', url: 'chrome-extension://lens/sidepanel.html', tab: { id: 7, windowId: 4 } } as chrome.runtime.MessageSender;
+  await t.test('native panel senders without tab or documentId accept a valid containing window', async () => {
+    const native = { id: 'lens', url: 'chrome-extension://lens/sidepanel.html' } as chrome.runtime.MessageSender;
+    assert.equal(await send({ target: 'background', type: 'panel-inbox', windowId: 4 }, native), null);
+    await assert.rejects(send({ target: 'background', type: 'panel-inbox', windowId: -1 }, native), /Invalid panel window/);
+  });
+  await t.test('panel preferences and prepared models do not change website languages', async () => {
+    const before = await send<Settings>({ target: 'background', type: 'state' });
+    const chosen = { sourceLanguage: 'auto', targetLanguage: 'es' };
+    await send({ target: 'background', type: 'panel-languages', pair: chosen }, panel);
+    await send({ target: 'background', type: 'panel-models-ready', pair: { sourceLanguage: 'de', targetLanguage: 'es' }, detector: true }, panel);
+    const after = await send<Settings>({ target: 'background', type: 'state' });
+    assert.deepEqual(after.pair, before.pair); assert.deepEqual(after.panelPair, chosen); assert.ok(after.preparedPairs.includes('de:es'));
+    await assert.rejects(send({ target: 'background', type: 'panel-languages', pair: chosen }), /side panel/);
+    await assert.rejects(send({ target: 'background', type: 'panel-languages', pair: chosen }, page), /extension controls/);
+    await assert.rejects(send({ target: 'background', type: 'panel-models-ready', pair: chosen }, panel), /concrete/);
+  });
+  await t.test('panel handoff opens synchronously, consumes text once, and isolates windows', async () => {
+    selectedText = 'Bonjour';
+    const tab = { ...tabs.get(1), windowId: 4 } as chrome.tabs.Tab;
+    const before = panelWindows.length;
+    menuClick({ menuItemId: 'panel-selection', frameId: 0 } as chrome.contextMenus.OnClickData, tab);
+    assert.equal(panelWindows.length, before + 1, 'open must happen inside the menu gesture');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await assert.rejects(send({ target: 'background', type: 'panel-inbox', windowId: 5 }, panel), /another browser window/);
+    const value = await send<{ text: string }>({ target: 'background', type: 'panel-inbox', windowId: 4 }, panel);
+    assert.equal(value.text, 'Bonjour');
+    assert.equal(await send({ target: 'background', type: 'panel-inbox', windowId: 4 }, panel), null);
+    assert.ok(!JSON.stringify(local).includes('Bonjour')); assert.ok(!JSON.stringify(session).includes('Bonjour'));
+    command('open-panel', tab); assert.equal(panelWindows.at(-1), 4);
+    await send({ target: 'background', type: 'site-preference', tabId: 1, never: true });
+    await assert.rejects(send({ target: 'background', type: 'panel-capture', windowId: 4 }, panel), /Never translate/);
   });
 });

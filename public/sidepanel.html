@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lingua Lens · Translation panel</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="sidepanel.css"></head>
+<body class="translation-panel">
+  <header class="brand"><span class="mark" aria-hidden="true">文<span>→A</span></span><div><strong>Lingua Lens</strong><small>Your translation workspace</small></div></header>
+  <main>
+    <div class="eyebrow">TRANSLATE BESIDE YOUR PAGE</div>
+    <div class="language-selectors">
+      <label>From<select id="source-language" aria-label="Source language" disabled></select></label>
+      <button id="swap-languages" class="swap-button" aria-label="Swap languages" disabled>⇄</button>
+      <label>To<select id="target-language" aria-label="Target language" disabled></select></label>
+    </div>
+    <p class="language-hint">Panel languages are separate from website preferences.</p>
+    <section id="incoming" class="incoming" aria-label="Incoming selection" hidden>
+      <strong id="incoming-title">New selection</strong><p id="incoming-preview"></p>
+      <div class="panel-actions"><button id="use-incoming" class="secondary">Use selection</button><button id="dismiss-incoming" class="text-button">Dismiss</button></div>
+    </section>
+    <div class="panel-actions"><label for="input-text" class="text-label">Original text</label><button id="capture" class="text-button" disabled>Use page selection</button></div>
+    <textarea id="input-text" dir="auto" rows="7" placeholder="Paste text here, or send a website selection with the right-click menu." disabled></textarea>
+    <div class="panel-actions"><small id="count">0 / 12,000 characters</small><button id="clear" class="text-button" disabled>Clear</button></div>
+    <button id="translate" class="primary" disabled>Translate</button>
+    <button id="cancel" class="secondary" hidden>Cancel</button>
+    <p id="status" class="language-hint" role="status" aria-live="polite">Opening your workspace…</p>
+    <p id="error" class="error" role="alert" hidden></p>
+    <section id="result-section" aria-label="Translation" hidden>
+      <div class="panel-actions"><strong id="result-label">Translation</strong><button id="copy" class="text-button">Copy translation</button></div>
+      <div id="result" class="panel-result" dir="auto" tabindex="0"></div>
+    </section>
+    <footer><span class="local-icon" aria-hidden="true">◉</span> Translated on your device <button id="settings" class="text-button">Languages &amp; setup</button></footer>
+    <p class="privacy-note">Text stays in this panel while it is open. Closing it clears your draft and translation. Language choices are saved.</p>
+  </main><script src="sidepanel.js"></script>
+</body></html>

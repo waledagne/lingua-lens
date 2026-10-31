@@ -11,7 +11,8 @@ export interface PassageTranslation { translations: string[]; sources: (string |
 export type ReadingMode = 'translated' | 'bilingual';
 export interface OriginalPassage { original: string; translated: string }
 export interface SitePreference { pair?: LanguagePair; never?: boolean; readingMode?: ReadingMode }
-export interface Settings { pair: LanguagePair; preparedPairs: string[]; detectorReady: boolean; ready: boolean; autoSites: string[]; sitePreferences?: Record<string, SitePreference>; understoodLanguages?: string[]; readingMode?: ReadingMode }
+export interface Settings { pair: LanguagePair; preparedPairs: string[]; detectorReady: boolean; ready: boolean; autoSites: string[]; sitePreferences?: Record<string, SitePreference>; understoodLanguages?: string[]; readingMode?: ReadingMode; panelPair?: LanguagePair }
+export interface PanelSelection { id: string; text?: string; pageLanguage?: string; site?: string; error?: string }
 export interface PageStatus { enabled: boolean; translated: number; pending: number; error: string | null; detectedSource?: string | null; detectedSources?: string[]; untranslated?: number; issues?: PassageIssue[] }
 export interface TabState extends Settings { enabled: boolean; site: string; status: PageStatus | null; defaultPair?: LanguagePair; defaultReadingMode?: ReadingMode; sitePreference?: SitePreference }
 export interface SelectionView { id: string; original: string; label: string; result?: string; error?: string }
@@ -28,6 +29,10 @@ export type BackgroundRequest =
   | { target: 'background'; type: 'selection'; tabId: number }
   | { target: 'background'; type: 'reveal-original'; tabId: number }
   | { target: 'background'; type: 'open-setup' }
+  | { target: 'background'; type: 'panel-inbox'; windowId: number }
+  | { target: 'background'; type: 'panel-capture'; windowId: number }
+  | { target: 'background'; type: 'panel-languages'; pair: LanguagePair }
+  | { target: 'background'; type: 'panel-models-ready'; pair?: LanguagePair; detector?: boolean }
   | { target: 'background'; type: 'toggle'; tabId: number; enabled: boolean }
   | { target: 'background'; type: 'auto'; tabId: number; enabled: boolean }
   | { target: 'background'; type: 'ready'; pair: LanguagePair; detectedSource?: string; tabId?: number };

@@ -41,7 +41,7 @@ test.beforeAll(async () => {
   const manifest = JSON.parse(await readFile(path.join(extension, 'manifest.json'), 'utf8'));
   manifest.host_permissions = ['http://127.0.0.1/*', 'https://127.0.0.1/*', 'http://localhost/*', 'https://localhost/*'];
   await writeFile(path.join(extension, 'manifest.json'), JSON.stringify(manifest));
-  for (const file of ['engine.js', 'setup.js']) {
+  for (const file of ['engine.js', 'setup.js', 'sidepanel.js']) {
     const source = await readFile(path.join(extension, file), 'utf8');
     await writeFile(path.join(extension, file), mock + source);
   }
@@ -124,6 +124,7 @@ test('language selection restores originals, prepares the chosen pair, and avoid
   await expect(shop.locator('h1')).toHaveText('Welcome to the shop');
   await popup.close();
 });
+
 test('manual translation also works on another hostname and unsupported pairs stay inactive', async () => {
   const other = await context.newPage();
   await other.goto(origin.replace('127.0.0.1', 'localhost'));
@@ -441,4 +442,83 @@ test('mixed passages detect different sources, preserve target and understood te
   await shop.evaluate(() => { (document.querySelector('#hidden-language') as HTMLElement).hidden = false; });
   await expect(shop.locator('#hidden-language')).toHaveText('fr:en:' + french);
   await popup.close();
+});
+
+test('translation workspace pastes, detects, prepares packs, and saves only independent language preferences', async () => {
+  const panel = await context.newPage();
+  await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await expect(panel.getByLabel('Source language', { exact: true })).toHaveValue('auto');
+  await panel.getByLabel('Target language', { exact: true }).selectOption('de');
+  const passage = 'Bonjour et bienvenue sur notre site. Voici toutes les informations pour votre visite.';
+  await control.evaluate(() => chrome.storage.local.set({ testUnavailablePair: 'fr:de' }));
+  await panel.getByLabel('Original text', { exact: true }).fill(passage);
+  await panel.getByRole('button', { name: 'Translate', exact: true }).click();
+  await expect(panel.getByRole('button', { name: 'Download & translate', exact: true })).toBeEnabled();
+  await panel.getByRole('button', { name: 'Download & translate', exact: true }).click();
+  await expect(panel.locator('#result')).toHaveText('fr:de:' + passage);
+  await panel.getByRole('button', { name: 'Copy translation' }).click();
+  await expect(panel.locator('#status')).toHaveText('Translation copied.');
+  await shop.bringToFront(); await panel.bringToFront();
+  await expect(panel.getByLabel('Original text', { exact: true })).toHaveValue(passage);
+  const saved = await control.evaluate(() => chrome.storage.local.get(null));
+  expect(saved.panelPair).toEqual({ sourceLanguage: 'auto', targetLanguage: 'de' });
+  expect(saved.pair).not.toEqual(saved.panelPair);
+  expect(JSON.stringify(saved)).not.toContain(passage);
+  await panel.setViewportSize({ width: 360, height: 820 });
+  expect(await panel.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await panel.screenshot({ path: 'work/sidepanel-preview.png', fullPage: true });
+  await panel.setViewportSize({ width: 260, height: 800 });
+  expect(await panel.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await panel.close();
+  const reopened = await context.newPage(); await reopened.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  await expect(reopened.getByLabel('Original text', { exact: true })).toHaveValue('');
+  await expect(reopened.getByLabel('Target language', { exact: true })).toHaveValue('de');
+  await reopened.close();
+});
+
+test('toolbar opens a real Chrome side panel and assigns its keyboard command', async () => {
+  await command('toggle', false);
+  const popup = await context.newPage(); await shop.bringToFront();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await popup.getByRole('button', { name: 'Open translation panel' }).click();
+  await expect.poll(async () => (await worker.evaluate(() => chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.SIDE_PANEL] }))).length).toBe(1);
+  const shortcuts = await worker.evaluate(() => chrome.commands.getAll());
+  expect(shortcuts.find(command => command.name === 'open-panel')?.shortcut).toBe('Alt+Shift+K');
+  // Side panels are CDP "other" targets, rather than ordinary Playwright pages.
+  const cdp = await context.browser()!.newBrowserCDPSession();
+  const { targetInfos } = await cdp.send('Target.getTargets');
+  const target = targetInfos.find(target => target.url === `chrome-extension://${extensionId}/sidepanel.html`)!;
+  const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: target.targetId });
+  let nextId = 0;
+  const panelValue = async (expression: string): Promise<unknown> => {
+    const id = ++nextId;
+    const result = new Promise<unknown>((resolve, reject) => {
+      const listener = (event: { sessionId: string; message: string }) => {
+        if (event.sessionId !== sessionId) return;
+        const message = JSON.parse(event.message);
+        if (message.id !== id) return;
+        cdp.off('Target.receivedMessageFromTarget', listener);
+        if (message.error || message.result?.exceptionDetails) reject(new Error(JSON.stringify(message)));
+        else resolve(message.result.result.value);
+      };
+      cdp.on('Target.receivedMessageFromTarget', listener);
+    });
+    await cdp.send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise: true, userGesture: true } }) });
+    return result;
+  };
+  await expect.poll(() => panelValue('document.querySelector("#input-text").disabled')).toBe(false);
+  expect(await panelValue('document.querySelector("#error").textContent')).toBe('');
+  await panelValue('document.querySelector("#target-language").value="de"; document.querySelector("#target-language").dispatchEvent(new Event("change"))');
+  await shop.bringToFront(); await shop.locator('h1').selectText();
+  await panelValue('document.querySelector("#capture").click()');
+  await expect.poll(() => panelValue('document.querySelector("#input-text").value')).toBe('Witaj w sklepie');
+  await panelValue('document.querySelector("#translate").click()');
+  await expect.poll(() => panelValue('document.querySelector("#result").textContent')).toBe('pl:de:Witaj w sklepie');
+  await control.bringToFront(); await shop.bringToFront();
+  expect(await panelValue('document.querySelector("#input-text").value')).toBe('Witaj w sklepie');
+  const panelWindow = await panelValue('chrome.windows.getCurrent().then(window => window.id)') as number;
+  await worker.evaluate(windowId => chrome.sidePanel.close({ windowId }), panelWindow);
+  await expect.poll(async () => (await worker.evaluate(() => chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.SIDE_PANEL] }))).length).toBe(0);
+  await cdp.detach();
+  await command('toggle', true);
 });
