@@ -9,6 +9,8 @@
     "dev": "node scripts/build.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/test.mjs",
+    "browser:prepare": "node --import tsx scripts/prepare-browser.ts",
+    "browser:doctor": "npm run build && node --import tsx scripts/browser-doctor.ts",
     "test:browser": "npm run build && playwright test",
     "check": "npm run typecheck && npm test && npm run build"
   },

@@ -10,6 +10,7 @@ let current: TabState | undefined;
 let busy = false;
 let dirty = false;
 let actionError: string | null = null;
+let pendingAuto: boolean | null = null;
 const controls = new LanguageControls(() => {
   dirty = current ? controls.changed(current.pair) : true;
   actionError = null;
@@ -48,7 +49,7 @@ function render(state: TabState): void {
   setup.hidden = state.ready && !pageError;
   setup.disabled = busy || dirty;
   setup.textContent = !state.ready && state.pair.sourceLanguage === 'auto' ? 'Enable automatic detection' : 'Prepare ' + pairLabel(detected ? { sourceLanguage: detected, targetLanguage: state.pair.targetLanguage } : state.pair);
-  auto.checked = state.autoSites.includes(state.site);
+  auto.checked = pendingAuto ?? state.autoSites.includes(state.site);
   auto.disabled = busy || dirty || !state.site || !state.ready;
 }
 async function refresh(): Promise<void> {
@@ -82,6 +83,7 @@ toggle.addEventListener('click', async () => {
 auto.addEventListener('change', async () => {
   if (tab?.id === undefined || !current?.site || busy || dirty) return;
   const enabled = auto.checked;
+  pendingAuto = enabled;
   busy = true; actionError = null;
   const site = current.site;
   render(current);
@@ -90,7 +92,7 @@ auto.addEventListener('change', async () => {
     if (enabled && !await chrome.permissions.request({ origins: siteOrigins(site) })) throw new Error('Website access was not granted. You can still translate this page manually.');
     await request<TabState>({ target: 'background', type: 'auto', tabId: tab.id, enabled });
   } catch (error) { actionError = errorMessage(error); }
-  finally { busy = false; await refresh(); }
+  finally { pendingAuto = null; busy = false; await refresh(); }
 });
 function openSetup(): void {
   if (tab?.id !== undefined && current?.site) void chrome.tabs.create({ url: chrome.runtime.getURL('setup.html') + '?tabId=' + String(tab.id) });

@@ -10,5 +10,5 @@
     "types": ["chrome", "node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["src", "tests", "playwright.config.ts"]
+  "include": ["src", "tests", "scripts", "playwright.config.ts"]
 }

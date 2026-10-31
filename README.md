@@ -65,12 +65,19 @@ npm run dev
 
 ```powershell
 npx playwright install chromium
+npm run browser:prepare
 npm run test:browser
 ```
 
-Browser tests launch a separate temporary profile and a test copy of the extension. Only that copy gets a deterministic fake Translator; **production `dist/` always calls the real Chrome API**. The browser suite is designed to verify the extension's routing, offscreen engine, worker, iframe support, dynamic DOM updates, restoration, and popup controls, not real translation quality. Unit tests exercise races and protected input handling. `LINGUA_LENS_BROWSER` can specify another Chrome for Testing executable when the downloaded default cannot launch.
+`browser:prepare` is optional: `test:browser` also prepares the runtime automatically. On Windows, preparation copies the complete bundled Chrome for Testing distribution into the ignored `work/playwright-browser/` directory, including its versioned manifest and DLLs. The project-local copy inherits workspace access and avoids the side-by-side assembly-resolution failure observed when launching directly from the shared download cache. It is reused until the bundled executable changes; missing assembly files trigger a repair copy. The shared cache, installed Chrome, system permissions, and registry are not modified.
 
-The latest completed checks passed TypeScript validation, the production build, and all 46 automated unit/integration tests. These include the actual popup, setup, and content scripts, detection confidence and regional codes, target-language passthrough, settings migration, per-site registration, pair-specific caching, and stale-response protection. The permission regression tests check requests against the real manifest declarations, permission denial, disabling without a new prompt, and migration of saved wildcard registrations. Chrome's detector, translator, and extension APIs are mocked in these tests. The full browser suite remains blocked before launch by a Windows side-by-side configuration error; real model accuracy and live website flows remain to be verified.
+Browser tests launch a separate temporary profile and a test copy of the extension. Only that extension copy gets deterministic fake Translator and Language Detector implementations; **production `dist/` always calls the real Chrome APIs**. The suite verifies actual Chrome extension messaging, permissions, offscreen documents, workers, frame injection, dynamic DOM updates, restoration, and popup controls. It does not validate real model accuracy. `LINGUA_LENS_BROWSER` can explicitly select another compatible Chrome for Testing executable. The test launcher does not open your personal Chrome profile.
+
+Use `npm run browser:doctor` to launch an unmodified copy of the production extension and print the real browser version and native model availability, without downloading models. A successful launch does not mean all models are available. In the fresh test profile checked here, Chrome 156.0.8078.4 reported Language Detector as `unavailable` and Polish → English translation as `downloadable`.
+
+The Windows runtime workaround follows the private-assembly requirement that manifests accompany their DLLs. [Microsoft assembly documentation](https://learn.microsoft.com/en-us/windows/win32/sbscs/assembly-manifests). The persistent, isolated Chromium launch follows [Playwright's extension-testing guidance](https://playwright.dev/docs/chrome-extensions).
+
+Validation passes TypeScript checking, the production build, all 47 unit/integration tests, and all 6 browser tests in Chrome for Testing 156.0.8078.4. Unit tests cover the actual UI/content scripts, detection confidence, target-language passthrough, migration, permission handling, caching, stale responses, and safe browser-runtime preparation. The browser tests exercise real extension APIs, including the automatic-site permission request. Real translation/detection accuracy and live commercial website flows remain to be verified; the browser suite uses deterministic models as described above.
 
 ## Troubleshooting automatic translation
 

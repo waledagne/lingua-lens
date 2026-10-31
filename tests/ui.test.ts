@@ -65,6 +65,8 @@ test('automatic translation requests declared schemes for only the selected site
   const { document, messages, permissionRequests } = await ui(t, 'popup', true, { detectorReady: true });
   const automatic = document.getElementById('auto') as HTMLInputElement;
   automatic.click();
+  assert.equal(automatic.checked, true, 'Keep the chosen state while the permission request is pending');
+  assert.equal(automatic.disabled, true, 'Prevent a second toggle until the request finishes');
   await until(() => automatic.checked && !automatic.disabled);
   assert.deepEqual(permissionRequests.map(origins => [...origins]), [['http://www.example.com/*', 'https://www.example.com/*']]);
   assert.ok(messages.some(message => message.type === 'auto' && message.enabled));

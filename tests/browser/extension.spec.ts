@@ -3,6 +3,7 @@ import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { prepareBrowser } from '../../scripts/browser-runtime.ts';
 test.describe.configure({ mode: 'serial' });
 
 // Only the isolated test copy receives a deterministic Translator. dist/ always uses Chrome's real API.
@@ -30,6 +31,8 @@ let extensionId: string;
 let tabId: number;
 
 test.beforeAll(async () => {
+  test.setTimeout(90000);
+  const executable = await prepareBrowser();
   const extension = path.resolve('work/browser-extension');
   await mkdir(extension, { recursive: true });
   await cp('dist', extension, { recursive: true });
@@ -49,10 +52,11 @@ test.beforeAll(async () => {
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   context = await chromium.launchPersistentContext('', {
     channel: 'chromium', headless: true,
-    executablePath: process.env.LINGUA_LENS_BROWSER || undefined,
+    executablePath: executable,
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
     viewport: { width: 1200, height: 900 },
   });
+  console.log('Chrome for Testing ' + context.browser()?.version());
   worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
   extensionId = new URL(worker.url()).host;
   control = await context.newPage();
