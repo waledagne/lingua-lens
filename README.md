@@ -14,6 +14,14 @@ Built with **TypeScript** for desktop **Google Chrome**, using Chrome's local tr
 
 Detection and translation use Chrome's local models. Additional translation providers remain future work.
 
+## Version 0.9: visible text first
+
+Page translation now starts with text in and near the viewport, prioritizes open dialogs, and follows scrolling into queued content. Visible words and placeholders go ahead of image alt text and tooltips. Requests start small and adapt to the observed model speed, and the remaining queue continues without the old pause after each group.
+
+Automatic source detection reuses a larger bounded in-memory cache, shares concurrent identical work, and avoids model startup for short labels already resolved by declared-language metadata. The queue count includes requests still being processed.
+
+Controlled tests show much earlier visible results and faster cached replay. Full-page completion still depends on the local model and the amount of text; these changes do not establish Google Translate speed. See [measurements and Amazon.pl checks](docs/PERFORMANCE.md). Reload the extension and refresh existing pages to use the new scheduler.
+
 ## Version 0.8: reliability and local testing
 
 Model downloads, compatibility checks, detection, and translation now have bounded waits. Cancel releases setup and panel controls even when a native call ignores abort; late model instances are discarded. A failed page translator is replaced on retry, and one stalled detector no longer creates a separate timeout for every remaining context in its batch. Empty translation chunks cannot be cached as a complete passage.
@@ -98,7 +106,7 @@ The built extension is already in `dist/`.
 7. Use **Always translate this site** to enable translation on future visits. Chrome will request access to that hostname when needed.
 8. Use **Pause & restore original** to restore source text. Pausing lasts until navigation; disable the site switch to stop future automatic translation.
 
-After updating an existing unpacked installation, reload the extension in `chrome://extensions` and refresh any pages that were already translated. Version 0.8 preserves existing language choices, reading modes, panel preferences, prepared pairs, permitted automatic sites, exclusions, and understood languages. Open Languages & setup to try the new diagnostic report. Older installations from before version 0.3 migrate to automatic detection while retaining the target and previous pack preparation.
+After updating an existing unpacked installation, reload the extension in `chrome://extensions` and refresh any pages that were already translated. Version 0.9 preserves existing language choices, reading modes, panel preferences, prepared pairs, permitted automatic sites, exclusions, and understood languages. Open Languages & setup to try the new diagnostic report. Older installations from before version 0.3 migrate to automatic detection while retaining the target and previous pack preparation.
 
 Chrome performs the first language-pack download. Availability depends on Chrome, its policies, your device, and the requested pair; setup reports failures instead of silently sending text to a server. No cloud fallback or API key is configured.
 
@@ -136,7 +144,7 @@ The native availability check reports Language Detector and Polish → English a
 
 The Windows runtime workaround follows the private-assembly requirement that manifests accompany their DLLs. [Microsoft assembly documentation](https://learn.microsoft.com/en-us/windows/win32/sbscs/assembly-manifests). The persistent, isolated Chromium launch follows [Playwright's extension-testing guidance](https://playwright.dev/docs/chrome-extensions).
 
-Validation covers TypeScript checking, the production build, 119 unit/integration tests, and 16 browser tests in Chrome for Testing 156.0.8078.4. Tests cover UI/content scripts, detection, migration, permissions, caching, stale responses, runtime preparation, per-site settings, exclusion across tabs, selection and frames, copy, assigned commands, and cancelled setup. Reading and mixed-language tests cover inline context, language boundaries, source-specific duplicate labels, missing-pack isolation and recovery, understood-language passthrough, live language/visibility changes, protected drafts, shadow roots, restoration, and original reveal without a model request. Panel tests cover staged user-gesture downloads, independent preferences, draft handoffs, cancellation, oversized input, copying, and narrow layouts. Browser coverage opens a real native side panel and captures and translates a page selection inside it. The browser suite exercises real extension APIs with deterministic models; keyboard and context-menu event routing is also tested with mocks. Real native-model completion, accuracy, Mac compatibility, and live commercial website flows remain release verification tasks.
+Validation covers TypeScript checking, the production build, 127 unit/integration tests, and 17 browser tests in Chrome for Testing 156.0.8078.4. Tests cover UI/content scripts, detection, migration, permissions, caching, stale responses, runtime preparation, per-site settings, exclusion across tabs, selection and frames, copy, assigned commands, and cancelled setup. Reading and mixed-language tests cover inline context, language boundaries, source-specific duplicate labels, missing-pack isolation and recovery, understood-language passthrough, live language/visibility changes, protected drafts, shadow roots, restoration, and original reveal without a model request. Panel tests cover staged user-gesture downloads, independent preferences, draft handoffs, cancellation, oversized input, copying, and narrow layouts. Browser coverage opens a real native side panel and captures and translates a page selection inside it. The browser suite exercises real extension APIs with deterministic models; keyboard and context-menu event routing is also tested with mocks. Real native-model completion, accuracy, Mac compatibility, and live commercial website flows remain release verification tasks.
 
 ## Troubleshooting automatic translation
 

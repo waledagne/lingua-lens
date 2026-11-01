@@ -47,6 +47,22 @@ test('a native detection hang discards the stuck detector and a retry recovers',
   await assert.rejects(source.detect({ sample, pageLanguage: '' }), /stopped responding/);
   assert.equal(await source.detect({ sample, pageLanguage: '' }), 'fr'); assert.equal(destroyed, 1); assert.equal(created, 2);
 });
+test('short declared labels avoid model startup and identical concurrent contexts share inference', async () => {
+  let created = 0, detected = 0, finish!: () => void;
+  const source = new SourceDetector(() => ({ availability: async () => 'available', create: async () => {
+    created++; return { detect: async () => { detected++; await new Promise<void>(resolve => { finish = resolve; }); return [{ detectedLanguage: 'fr', confidence: 0.99 }]; }, destroy() {} };
+  } }));
+  assert.equal(await source.detect({ sample: 'Koszyk', pageLanguage: 'pl' }), 'pl'); assert.equal(created, 0);
+  const one = source.detect({ sample, pageLanguage: 'fr' }), two = source.detect({ sample, pageLanguage: 'fr' });
+  while (!finish) await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(detected, 1); finish(); assert.deepEqual(await Promise.all([one, two]), ['fr', 'fr']); assert.equal(created, 1);
+});
+test('reading a large page twice reuses detection instead of evicting every context during the second pass', async () => {
+  let detected = 0;
+  const source = new SourceDetector(() => ({ availability: async () => 'available', create: async () => ({ detect: async () => { detected++; return [{ detectedLanguage: 'fr', confidence: 0.99 }]; }, destroy() {} }) }));
+  for (let pass = 0; pass < 2; pass++) for (let i = 0; i < 600; i++) await source.detect({ sample: sample + ' Passage ' + i, pageLanguage: 'fr' });
+  assert.equal(detected, 600);
+});
 test('page samples exclude editable content and are safe to serialize into Chrome scripting', async () => {
   const window = new Window({ url: 'https://example.com' });
   try {

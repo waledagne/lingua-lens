@@ -2,9 +2,10 @@ import { errorMessage, MAX_BATCH, MAX_TEXT, withPadding, type OriginalPassage, t
 import { paragraphSnapshot, READING_BLOCKS, readingBlock, renderParagraph, sameParagraph, type ParagraphSnapshot } from './paragraph';
 import { passageContext } from './passage-context';
 import { explicitlyHidden } from './dom-language';
+import { BatchPacer } from './batch-pacer';
 
 type Translate = (texts: string[], contexts: SourceContext[]) => Promise<string[] | PassageTranslation>;
-interface Entry { node: Text | Element; attribute?: string; original: string; translated?: string; paragraph?: ParagraphSnapshot; rendered?: HTMLElement; sourceLanguage?: string; issue?: PassageIssue }
+interface Entry { node: Text | Element; attribute?: string; original: string; translated?: string; paragraph?: ParagraphSnapshot; rendered?: HTMLElement; sourceLanguage?: string; issue?: PassageIssue; target?: Element }
 const ATTRIBUTES = ['title', 'aria-label', 'placeholder', 'alt'];
 const SKIP = 'script,style,noscript,template,textarea,code,pre,kbd,samp,[contenteditable]:not([contenteditable="false"]),[translate="no"],[data-lingua-lens-ignore]';
 
@@ -26,6 +27,12 @@ export class DomTranslator {
   private targetLanguage = '';
   private scannedParagraphs?: Set<Element>;
   private automatic = false;
+  private pacer = new BatchPacer();
+  private inFlightCount = 0;
+  private viewport?: IntersectionObserver;
+  private targets = new Map<Element, Set<Entry>>();
+  private visibility = new Map<Element, boolean>();
+  private visible = new Set<Entry>();
 
   constructor(private document: Document, private translate: Translate, private delay = 80) {}
   setAutomaticDetection(automatic: boolean): void { this.automatic = automatic; }
@@ -82,7 +89,7 @@ export class DomTranslator {
     return {
       enabled: this.enabled,
       translated: [...this.entries].filter(entry => entry.node.isConnected && entry.translated !== undefined && entry.translated !== entry.original).length,
-      pending: this.pending.size, error: this.error, detectedSources, issues, untranslated: live.filter(entry => entry.issue).length,
+      pending: this.pending.size + this.inFlightCount, error: this.error, detectedSources, issues, untranslated: live.filter(entry => entry.issue).length,
     };
   }
   start(): void {
@@ -90,6 +97,14 @@ export class DomTranslator {
     for (const entry of this.entries) entry.issue = undefined;
     if (!this.enabled) {
       this.enabled = true; this.generation++;
+      this.pacer.reset();
+      const generation = this.generation;
+      const Observer = this.document.defaultView!.IntersectionObserver;
+      if (Observer) this.viewport = new Observer(changes => {
+        if (!this.enabled || generation !== this.generation) return;
+        for (const change of changes) this.setVisible(change.target, change.isIntersecting && change.boundingClientRect.width > 0 && change.boundingClientRect.height > 0);
+        this.schedule();
+      }, { rootMargin: '160px 0px' });
       this.observe(this.document);
       this.document.addEventListener('click', this.interaction, true);
       this.document.addEventListener('focusin', this.interaction, true);
@@ -98,12 +113,14 @@ export class DomTranslator {
       this.discovery = setInterval(() => { this.discover(); this.prune(); }, 2500);
     }
     this.scan(this.document);
-    this.schedule();
+    this.schedule(true);
   }
   stop(): void {
     this.enabled = false; this.generation++;
     for (const observer of this.observers.values()) observer.disconnect();
     this.observers.clear(); clearTimeout(this.timer); clearTimeout(this.discoveryTimer); clearInterval(this.discovery);
+    this.viewport?.disconnect(); this.viewport = undefined;
+    this.targets.clear(); this.visibility.clear(); this.visible.clear(); this.inFlightCount = 0;
     this.timer = undefined;
     this.document.removeEventListener('click', this.interaction, true);
     this.document.removeEventListener('focusin', this.interaction, true);
@@ -113,6 +130,48 @@ export class DomTranslator {
       if (entry.node.isConnected && entry.translated !== undefined && this.read(entry) === entry.translated) this.write(entry, entry.original);
     }
     this.entries.clear(); this.pending.clear(); this.index = new WeakMap(); this.error = null;
+  }
+  private element(entry: Entry): Element | null { return entry.node.nodeType === 3 ? entry.node.parentElement : entry.node as Element; }
+  private setVisible(element: Element, visible: boolean): void {
+    if (!this.targets.has(element)) return;
+    this.visibility.set(element, visible);
+    for (const entry of this.targets.get(element) ?? []) {
+      if (visible) this.visible.add(entry); else this.visible.delete(entry);
+    }
+  }
+  private track(entry: Entry): void {
+    const element = this.element(entry);
+    if (!element) return;
+    let entries = this.targets.get(element);
+    if (!entries) {
+      entries = new Set(); this.targets.set(element, entries);
+      // Seed once so the first batch does not wait for the observer's first frame.
+      const rect = element.getBoundingClientRect(), view = this.document.defaultView!;
+      this.visibility.set(element, rect.width > 0 && rect.height > 0 && rect.bottom >= -160 && rect.top <= view.innerHeight + 160 && rect.right >= 0 && rect.left <= view.innerWidth);
+      this.viewport?.observe(element);
+    }
+    entries.add(entry);
+    entry.target = element;
+    if (this.visibility.get(element)) this.visible.add(entry);
+  }
+  private untrack(entry: Entry): void {
+    this.visible.delete(entry);
+    const element = entry.target;
+    if (!element) return;
+    entry.target = undefined;
+    const entries = this.targets.get(element); entries?.delete(entry);
+    if (entries?.size === 0) { this.targets.delete(element); this.visibility.delete(element); this.viewport?.unobserve(element); }
+  }
+  private *prioritized(): Iterable<Entry> {
+    const onscreen = [...this.visible].filter(entry => this.pending.has(entry));
+    const dialogs = new Set(onscreen.filter(entry => this.element(entry)?.closest('dialog[open],[role="dialog"],[aria-modal="true"]')));
+    // Alt text, tooltips and accessibility labels do not paint ordinary page
+    // text. Keep them from delaying the words and placeholders the user sees.
+    for (const entry of dialogs) if (!entry.attribute || entry.attribute === 'placeholder') yield entry;
+    for (const entry of onscreen) if (!dialogs.has(entry) && (!entry.attribute || entry.attribute === 'placeholder')) yield entry;
+    for (const entry of dialogs) if (entry.attribute && entry.attribute !== 'placeholder') yield entry;
+    for (const entry of onscreen) if (!dialogs.has(entry) && entry.attribute && entry.attribute !== 'placeholder') yield entry;
+    for (const entry of this.pending) if (!this.visible.has(entry)) yield entry;
   }
   private read(entry: Entry): string {
     if (entry.paragraph) return paragraphSnapshot(entry.node as Element, element => this.eligible(element))?.text ?? '';
@@ -148,16 +207,22 @@ export class DomTranslator {
         if (snapshot) { this.scannedParagraphs?.add(block); this.collectParagraph(block, snapshot); return; }
       }
     }
-    const current = attribute ? element.getAttribute(attribute) ?? '' : (node as Text).data;
+    let current = attribute ? element.getAttribute(attribute) ?? '' : (node as Text).data;
     const trimmed = current.trim();
     if (!trimmed || !/\p{L}/u.test(trimmed) || current.length > MAX_TEXT) return;
     const key = attribute ?? '#text';
     let byKey = this.index.get(node);
     if (!byKey) { byKey = new Map(); this.index.set(node, byKey); }
     let entry = byKey.get(key);
+    if (entry && entry.target !== element) {
+      // A website can move an existing text node while a result is in flight.
+      // Re-register it at its new location and discard the old pending result.
+      if (entry.translated !== undefined && current === entry.translated) { this.write(entry, entry.original); current = entry.original; }
+      this.untrack(entry); this.entries.delete(entry); this.pending.delete(entry); byKey.delete(key); entry = undefined;
+    }
     if (entry?.translated === current) return;
     if (entry?.issue && entry.original === current) return;
-    if (!entry) { entry = { node, attribute, original: current }; byKey.set(key, entry); this.entries.add(entry); }
+    if (!entry) { entry = { node, attribute, original: current }; byKey.set(key, entry); this.entries.add(entry); this.track(entry); }
     else if (entry.original !== current) { entry.original = current; entry.translated = undefined; entry.issue = undefined; entry.sourceLanguage = undefined; }
     this.pending.add(entry);
   }
@@ -169,7 +234,7 @@ export class DomTranslator {
       const previous = this.index.get(part.node)?.get('#text');
       if (!previous) continue;
       if (previous.translated !== undefined && this.read(previous) === previous.translated) this.write(previous, previous.original);
-      this.entries.delete(previous); this.pending.delete(previous); this.index.get(part.node)?.delete('#text'); restored = true;
+      this.entries.delete(previous); this.pending.delete(previous); this.untrack(previous); this.index.get(part.node)?.delete('#text'); restored = true;
     }
     if (restored) snapshot = paragraphSnapshot(block, element => this.eligible(element)) ?? snapshot;
     let byKey = this.index.get(block);
@@ -184,7 +249,7 @@ export class DomTranslator {
       entry.paragraph = snapshot; entry.original = snapshot.text;
     } else {
       entry = { node: block, original: snapshot.text, paragraph: snapshot };
-      byKey.set('#paragraph', entry); this.entries.add(entry);
+      byKey.set('#paragraph', entry); this.entries.add(entry); this.track(entry);
     }
     this.pending.add(entry);
   }
@@ -220,7 +285,7 @@ export class DomTranslator {
       if (!this.belongs(entry.node, root)) continue;
       if (entry.paragraph) entry.rendered?.remove();
       else if (entry.translated !== undefined && this.read(entry) === entry.translated) this.write(entry, entry.original);
-      this.entries.delete(entry); this.pending.delete(entry);
+      this.entries.delete(entry); this.pending.delete(entry); this.untrack(entry);
       this.index.get(entry.node)?.delete(entry.paragraph ? '#paragraph' : entry.attribute ?? '#text');
     }
     this.scan(root);
@@ -305,7 +370,7 @@ export class DomTranslator {
   private prune(): void {
     for (const entry of this.entries) {
       if (!entry.node.isConnected || (entry.paragraph && !this.current(entry))) {
-        entry.rendered?.remove(); this.entries.delete(entry); this.pending.delete(entry);
+        entry.rendered?.remove(); this.entries.delete(entry); this.pending.delete(entry); this.untrack(entry);
         this.index.get(entry.node)?.delete(entry.paragraph ? '#paragraph' : entry.attribute ?? '#text');
       }
     }
@@ -313,9 +378,9 @@ export class DomTranslator {
       if (!root.isConnected) { observer.disconnect(); this.observers.delete(root); }
     }
   }
-  private schedule(): void {
+  private schedule(immediate = false): void {
     if (!this.enabled || this.flushing || this.timer || this.suspended || !this.pending.size) return;
-    this.timer = setTimeout(() => { this.timer = undefined; void this.flush(); }, this.delay);
+    this.timer = setTimeout(() => { this.timer = undefined; void this.flush(); }, immediate ? 0 : this.delay);
   }
   private async flush(): Promise<void> {
     if (!this.enabled || this.flushing || this.suspended) return;
@@ -324,7 +389,7 @@ export class DomTranslator {
     const batch: { entry: Entry; source: string; key: string }[] = [];
     const unique = new Map<string, { text: string; context: SourceContext }>();
     let total = 0;
-    for (const entry of this.pending) {
+    for (const entry of this.prioritized()) {
       if (!this.entries.has(entry)) { this.pending.delete(entry); continue; }
       if (!entry.node.isConnected) { this.pending.delete(entry); continue; }
       const source = this.read(entry);
@@ -332,14 +397,16 @@ export class DomTranslator {
       const text = source.trim();
       const context = this.automatic ? this.context(entry) : { sample: '', pageLanguage: '' };
       const key = this.automatic ? text + '\0' + context.pageLanguage + '\0' + context.sample : text;
-      if (!unique.has(key) && (unique.size >= MAX_BATCH || total + text.length > 24000)) break;
+      if (!unique.has(key) && (unique.size >= Math.min(MAX_BATCH, this.pacer.limit) || total + text.length > 24000)) break;
       if (!unique.has(key)) total += text.length;
       unique.set(key, { text, context }); batch.push({ entry, source, key }); this.pending.delete(entry);
     }
     try {
       if (!batch.length) return;
       const values = [...unique.values()], texts = values.map(value => value.text);
+      const started = performance.now(); this.inFlightCount = batch.length;
       const result = await this.translate(texts, values.map(value => value.context));
+      if (generation === this.generation) this.pacer.complete(texts.length, performance.now() - started);
       const translations = Array.isArray(result) ? result : result.translations;
       if (translations.length !== texts.length || translations.some(text => typeof text !== 'string' || !text.trim())) throw new Error('The translation engine returned an incomplete result.');
       if (!Array.isArray(result) && (result.sources.length !== texts.length || result.issues.length !== texts.length)) throw new Error('The language detector returned an incomplete result.');
@@ -363,7 +430,7 @@ export class DomTranslator {
         for (const { entry } of batch) if (entry.node.isConnected) this.pending.add(entry);
       }
     } finally {
-      this.flushing = false; this.prune(); this.schedule();
+      this.inFlightCount = 0; this.flushing = false; this.prune(); this.schedule(true);
     }
   }
 }

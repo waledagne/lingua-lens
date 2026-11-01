@@ -552,3 +552,38 @@ test('diagnostics copy metadata without page text, and a long page lets new dial
   await expect(shop.locator('#long-page p').last()).toHaveText('Informacje o produkcie i sposobie dostawy numer 599');
   await writeFile('work/long-page-verification.json', JSON.stringify({ browser: context.browser()?.version(), modelMode: 'simulated', paragraphs: 600, elapsedMs, pendingAtDialog, draftPreserved: true, restoration: true }, null, 2) + '\n');
 });
+
+test('visible text paints first and scrolling promotes new content ahead of the background backlog', async () => {
+  await command('toggle', false); await shop.goto(origin); await command('toggle', false);
+  await shop.evaluate(() => {
+    document.body.innerHTML = '<section id="backlog" style="position:absolute;top:3000px"></section><main id="visible"></main><textarea id="draft">My draft</textarea>';
+    for (let i = 0; i < 400; i++) {
+      const p = document.createElement('p'); p.id = 'back-' + i; p.textContent = 'Informacje o produkcie numer ' + i;
+      document.getElementById('backlog')!.append(p);
+    }
+    for (let i = 0; i < 12; i++) {
+      const p = document.createElement('p'); p.id = 'top-' + i; p.textContent = 'Widoczny opis produktu numer ' + i;
+      document.getElementById('visible')!.append(p);
+    }
+    const order: string[] = [];
+    const observer = new MutationObserver(records => {
+      for (const record of records) {
+        const node = record.target, parent = node.parentElement;
+        if (node.nodeType === 3 && node.textContent?.startsWith('English:') && parent?.id) order.push(parent.id);
+      }
+    });
+    observer.observe(document.body, { subtree: true, characterData: true }); Object.assign(globalThis, { __paintOrder: order, __paintObserver: observer });
+  });
+  await command('toggle', true);
+  await expect(shop.locator('#top-0')).toContainText('English:');
+  const order = await shop.evaluate(() => (globalThis as typeof globalThis & { __paintOrder: string[] }).__paintOrder.slice(0, 4));
+  expect(order).toHaveLength(4); expect(order.every(id => id.startsWith('top-'))).toBe(true);
+  await shop.locator('#back-399').scrollIntoViewIfNeeded();
+  await expect(shop.locator('#back-399')).toContainText('English:');
+  await expect(shop.locator('#back-200')).toHaveText('Informacje o produkcie numer 200');
+  await expect(shop.locator('#draft')).toHaveValue('My draft');
+  await command('toggle', false);
+  await expect(shop.locator('#top-0')).toHaveText('Widoczny opis produktu numer 0');
+  await expect(shop.locator('#back-399')).toHaveText('Informacje o produkcie numer 399');
+  await shop.evaluate(() => (globalThis as typeof globalThis & { __paintObserver: MutationObserver }).__paintObserver.disconnect());
+});

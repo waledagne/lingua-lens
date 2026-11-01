@@ -32,10 +32,30 @@ export async function detectSource(detector: LocalLanguageDetector, context: Sou
 export class SourceDetector {
   private instance?: Promise<LocalLanguageDetector>;
   private cache = new Map<string, string>();
+  private cacheCharacters = 0;
+  private pending = new Map<string, Promise<string>>();
   constructor(private api: () => DetectorFactory, private timeoutMs = MODEL_CALL_MS) {}
-  async detect(context: SourceContext): Promise<string> {
+  detect(context: SourceContext): Promise<string> {
     const key = context.pageLanguage + '\0' + context.sample;
-    if (this.cache.has(key)) return this.cache.get(key)!;
+    const cached = this.cache.get(key);
+    if (cached) { this.cache.delete(key); this.cache.set(key, cached); return Promise.resolve(cached); }
+    const active = this.pending.get(key);
+    if (active) return active;
+    const task = this.resolve({ ...context }).then(result => {
+      this.cache.set(key, result); this.cacheCharacters += key.length + result.length;
+      while (this.cache.size > 1024 || this.cacheCharacters > 2000000) {
+        const [oldest, value] = this.cache.entries().next().value!;
+        this.cache.delete(oldest); this.cacheCharacters -= oldest.length + value.length;
+      }
+      return result;
+    }).finally(() => { this.pending.delete(key); });
+    this.pending.set(key, task);
+    return task;
+  }
+  private async resolve(context: SourceContext): Promise<string> {
+    const hint = normalizeLanguage(context.pageLanguage);
+    // Short UI labels already use markup as their source; no native startup is needed.
+    if (hint && (context.sample.match(/\p{L}/gu)?.length ?? 0) < 40) return hint;
     if (!this.instance) this.instance = (async () => {
       const api = this.api();
       if (await modelTask(() => api.availability(), { timeoutMs: Math.min(this.timeoutMs, MODEL_CHECK_MS) }) !== 'available') throw new Error('Open Lingua Lens setup to enable automatic language detection first.');
@@ -48,8 +68,6 @@ export class SourceDetector {
         throw cause;
       }), destroy() {},
     }, context);
-    this.cache.set(key, result);
-    while (this.cache.size > 128) this.cache.delete(this.cache.keys().next().value!);
     return result;
   }
 }

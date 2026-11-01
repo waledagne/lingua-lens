@@ -19,6 +19,66 @@ function fixture(t: TestContext, html: string, translate: ConstructorParameters<
   t.after(async () => { controller.stop(); await window.happyDOM.close(); });
   return { document, controller };
 }
+const visibleRect = () => ({ x: 0, y: 20, left: 0, top: 20, right: 100, bottom: 40, width: 100, height: 20, toJSON() {} }) as DOMRect;
+
+test('visible text is requested before hidden/offscreen backlog and pending includes the active request', async t => {
+  let finish!: (texts: string[]) => void;
+  const calls: string[][] = [];
+  const background = Array.from({ length: 80 }, (_, i) => '<p>Produkt ' + i + '</p>').join('');
+  const { document, controller } = fixture(t, '<section hidden>' + background + '</section><main><h1>Witaj</h1><button>Szukaj</button></main>', texts => {
+    calls.push(texts); return calls.length === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(texts.map(text => 'EN:' + text));
+  });
+  for (const element of document.querySelectorAll('h1,button')) element.getBoundingClientRect = visibleRect;
+  controller.start(); await until(() => !!finish);
+  assert.deepEqual(calls[0].slice(0, 2), ['Witaj', 'Szukaj']); assert.ok(calls[0].length < 32);
+  assert.equal(controller.status().pending, 82);
+  finish(calls[0].map(text => 'EN:' + text)); await until(() => controller.status().translated === 82);
+});
+test('a new visible dialog goes ahead of the remaining visible page', async t => {
+  let finish!: (texts: string[]) => void;
+  const calls: string[][] = [];
+  const { document, controller } = fixture(t, Array.from({ length: 20 }, (_, i) => '<p>Produkt ' + i + '</p>').join(''), texts => {
+    calls.push(texts); return calls.length === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(texts.map(text => 'EN:' + text));
+  });
+  for (const element of document.querySelectorAll('p')) element.getBoundingClientRect = visibleRect;
+  controller.start(); await until(() => !!finish);
+  const dialog = document.createElement('dialog'); dialog.open = true; dialog.innerHTML = '<h2>Wybierz dostawę</h2>';
+  dialog.querySelector('h2')!.getBoundingClientRect = visibleRect; document.body.append(dialog);
+  await sleep(5); finish(calls[0].map(text => 'EN:' + text));
+  await until(() => calls.length > 1); assert.equal(calls[1][0], 'Wybierz dostawę');
+  await until(() => controller.status().pending === 0);
+});
+test('painted words and placeholders go ahead of image alt text and tooltips', async t => {
+  const calls: string[][] = [];
+  const { document, controller } = fixture(t, Array.from({ length: 12 }, (_, i) => '<img alt="Zdjęcie ' + i + '">').join('') + '<h1>Widoczny nagłówek</h1><input placeholder="Szukaj produktów"><button title="Podpowiedź">Kup teraz</button>', async texts => { calls.push(texts); return texts.map(text => 'EN:' + text); });
+  for (const element of document.querySelectorAll('*')) element.getBoundingClientRect = visibleRect;
+  controller.start(); await until(() => calls.length > 0);
+  assert.deepEqual(calls[0].slice(0, 3), ['Widoczny nagłówek', 'Szukaj produktów', 'Kup teraz']);
+  await until(() => controller.status().pending === 0);
+  assert.equal(document.querySelector('img')!.alt, 'EN:Zdjęcie 0');
+});
+test('viewport observers are released when their text nodes detach', async t => {
+  const { document, controller } = fixture(t, '<p>Witaj</p>');
+  const removed: Element[] = [];
+  Object.defineProperty(document.defaultView, 'IntersectionObserver', { configurable: true, value: class {
+    observe() {} unobserve(element: Element) { removed.push(element); } disconnect() {}
+  } });
+  controller.start(); await until(() => controller.status().translated === 1);
+  const p = document.querySelector('p')!; p.textContent = '';
+  await until(() => removed.includes(p)); assert.equal(controller.status().translated, 0);
+});
+test('moving a text node during inference re-registers it and discards its old response', async t => {
+  let finish!: (texts: string[]) => void;
+  let calls = 0;
+  const { document, controller } = fixture(t, '<p id="one">Witaj</p><p id="two"></p>', texts => {
+    calls++; return calls === 1 ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(texts.map(text => 'NEW:' + text));
+  });
+  controller.start(); await until(() => !!finish);
+  document.querySelector('#two')!.append(document.querySelector('#one')!.firstChild!);
+  await sleep(5); finish(['OLD:Witaj']);
+  await until(() => document.querySelector('#two')!.textContent === 'NEW:Witaj');
+  controller.stop(); assert.equal(document.querySelector('#two')!.textContent, 'Witaj');
+});
 
 test('translates initial text and attributes; restores exact whitespace without replacing buttons', async t => {
   const { document, controller } = fixture(t, '<button title="Kup teraz">  Dodaj do koszyka  </button>');
